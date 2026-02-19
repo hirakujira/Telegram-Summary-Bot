@@ -1,0 +1,9 @@
+services:
+  telegram-summary-bot:
+    build: .
+    container_name: telegram-summary-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data

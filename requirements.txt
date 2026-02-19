@@ -1,0 +1,4 @@
+python-telegram-bot[job-queue]>=21.0,<22.0
+openai>=1.0,<2.0
+aiosqlite>=0.20,<1.0
+croniter>=6.0,<7.0
