@@ -15,16 +15,26 @@ class ChatSettings:
     auto_enabled: bool
     model: str
     api_style: str
+    reasoning_effort: str
     next_run_at_utc: str
 
 
 class Database:
-    def __init__(self, path: str, default_timezone: str, default_cron_expr: str, default_model: str, default_api_style: str):
+    def __init__(
+        self,
+        path: str,
+        default_timezone: str,
+        default_cron_expr: str,
+        default_model: str,
+        default_api_style: str,
+        default_reasoning_effort: str,
+    ):
         self.path = path
         self.default_timezone = default_timezone
         self.default_cron_expr = default_cron_expr
         self.default_model = default_model
         self.default_api_style = default_api_style
+        self.default_reasoning_effort = default_reasoning_effort
         self.conn: aiosqlite.Connection | None = None
 
     async def connect(self) -> None:
@@ -40,6 +50,7 @@ class Database:
               auto_enabled INTEGER NOT NULL DEFAULT 1,
               model TEXT NOT NULL,
               api_style TEXT NOT NULL,
+              reasoning_effort TEXT NOT NULL DEFAULT 'default',
               next_run_at_utc TEXT NOT NULL,
               updated_at_utc TEXT NOT NULL
             );
@@ -64,6 +75,13 @@ class Database:
             ON messages(chat_id, created_at_utc);
             """
         )
+        columns_cursor = await self.conn.execute("PRAGMA table_info(chat_settings)")
+        columns = {row[1] for row in await columns_cursor.fetchall()}
+        if "reasoning_effort" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE chat_settings "
+                "ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'default'"
+            )
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -84,8 +102,11 @@ class Database:
         now = to_iso(utc_now())
         await self.conn.execute(
             """
-            INSERT INTO chat_settings(chat_id, timezone, cron_expr, auto_enabled, model, api_style, next_run_at_utc, updated_at_utc)
-            VALUES(?, ?, ?, 1, ?, ?, ?, ?)
+            INSERT INTO chat_settings(
+              chat_id, timezone, cron_expr, auto_enabled, model, api_style,
+              reasoning_effort, next_run_at_utc, updated_at_utc
+            )
+            VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -93,6 +114,7 @@ class Database:
                 self.default_cron_expr,
                 self.default_model,
                 self.default_api_style,
+                self.default_reasoning_effort,
                 to_iso(next_run),
                 now,
             ),
@@ -110,6 +132,7 @@ class Database:
             auto_enabled=True,
             model=self.default_model,
             api_style=self.default_api_style,
+            reasoning_effort=self.default_reasoning_effort,
             next_run_at_utc=to_iso(next_run),
         )
 
@@ -133,6 +156,7 @@ class Database:
         auto_enabled: bool | None = None,
         model: str | None = None,
         api_style: str | None = None,
+        reasoning_effort: str | None = None,
         recompute_next_run: bool = False,
     ) -> ChatSettings:
         settings = await self.get_chat_settings(chat_id)
@@ -142,6 +166,9 @@ class Database:
         new_auto_enabled = settings.auto_enabled if auto_enabled is None else auto_enabled
         new_model = model if model is not None else settings.model
         new_api_style = api_style if api_style is not None else settings.api_style
+        new_reasoning_effort = (
+            reasoning_effort if reasoning_effort is not None else settings.reasoning_effort
+        )
         new_next_run = settings.next_run_at_utc
 
         if recompute_next_run:
@@ -151,7 +178,8 @@ class Database:
         await self.conn.execute(
             """
             UPDATE chat_settings
-            SET timezone = ?, cron_expr = ?, auto_enabled = ?, model = ?, api_style = ?, next_run_at_utc = ?, updated_at_utc = ?
+            SET timezone = ?, cron_expr = ?, auto_enabled = ?, model = ?, api_style = ?,
+                reasoning_effort = ?, next_run_at_utc = ?, updated_at_utc = ?
             WHERE chat_id = ?
             """,
             (
@@ -160,6 +188,7 @@ class Database:
                 1 if new_auto_enabled else 0,
                 new_model,
                 new_api_style,
+                new_reasoning_effort,
                 new_next_run,
                 to_iso(utc_now()),
                 chat_id,
@@ -313,5 +342,6 @@ class Database:
             auto_enabled=bool(row["auto_enabled"]),
             model=row["model"],
             api_style=row["api_style"],
+            reasoning_effort=row["reasoning_effort"],
             next_run_at_utc=row["next_run_at_utc"],
         )

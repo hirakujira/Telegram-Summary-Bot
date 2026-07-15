@@ -4,6 +4,8 @@ import logging
 
 from openai import AsyncOpenAI
 
+from app.reasoning import call_with_reasoning_fallback, reasoning_request_kwargs
+
 logger = logging.getLogger("telegram-summary-bot")
 
 
@@ -42,8 +44,16 @@ class OpenAISummarizer:
     def __init__(self, api_key: str, max_output_tokens: int):
         self.client = AsyncOpenAI(api_key=api_key)
         self.max_output_tokens = max_output_tokens
+        self._reasoning_fallbacks: set[tuple[str, str, str]] = set()
 
-    async def summarize(self, *, transcript: str, model: str, api_style: str) -> str:
+    async def summarize(
+        self,
+        *,
+        transcript: str,
+        model: str,
+        api_style: str,
+        reasoning_effort: str,
+    ) -> str:
         style = self._resolve_api_style(model, api_style)
 
         if style == "responses":
@@ -51,12 +61,14 @@ class OpenAISummarizer:
                 transcript=transcript,
                 model=model,
                 max_output_tokens=self.max_output_tokens,
+                reasoning_effort=reasoning_effort,
             )
 
         return await self._summarize_via_chat(
             transcript=transcript,
             model=model,
             max_tokens=self.max_output_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     @staticmethod
@@ -76,10 +88,11 @@ class OpenAISummarizer:
         transcript: str,
         model: str,
         max_output_tokens: int,
+        reasoning_effort: str,
     ) -> str:
-        response = await self.client.responses.create(
-            model=model,
-            input=[
+        request_kwargs = {
+            "model": model,
+            "input": [
                 {
                     "role": "system",
                     "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
@@ -89,7 +102,14 @@ class OpenAISummarizer:
                     "content": [{"type": "input_text", "text": transcript}],
                 },
             ],
-            max_output_tokens=max_output_tokens,
+            "max_output_tokens": max_output_tokens,
+        }
+        response = await self._create_with_reasoning_fallback(
+            create=self.client.responses.create,
+            request_kwargs=request_kwargs,
+            api_style="responses",
+            model=model,
+            reasoning_effort=reasoning_effort,
         )
         text = self._extract_response_text(response)
         diagnostics = self._build_response_diagnostics(response)
@@ -112,17 +132,68 @@ class OpenAISummarizer:
         )
         return ""
 
-    async def _summarize_via_chat(self, *, transcript: str, model: str, max_tokens: int) -> str:
-        response = await self.client.chat.completions.create(
-            model=model,
-            messages=[
+    async def _summarize_via_chat(
+        self,
+        *,
+        transcript: str,
+        model: str,
+        max_tokens: int,
+        reasoning_effort: str,
+    ) -> str:
+        request_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": transcript},
             ],
-            max_tokens=max_tokens,
-            temperature=0.7,
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }
+        response = await self._create_with_reasoning_fallback(
+            create=self.client.chat.completions.create,
+            request_kwargs=request_kwargs,
+            api_style="chat",
+            model=model,
+            reasoning_effort=reasoning_effort,
+            drop_when_reasoning=("max_tokens", "temperature"),
+            add_when_reasoning={"max_completion_tokens": max_tokens},
         )
         return (response.choices[0].message.content or "").strip()
+
+    async def _create_with_reasoning_fallback(
+        self,
+        *,
+        create,
+        request_kwargs: dict,
+        api_style: str,
+        model: str,
+        reasoning_effort: str,
+        drop_when_reasoning: tuple[str, ...] = (),
+        add_when_reasoning: dict | None = None,
+    ):
+        reasoning_kwargs = reasoning_request_kwargs(api_style, reasoning_effort)
+        fallback_key = (api_style, model, reasoning_effort)
+        if not reasoning_kwargs or fallback_key in self._reasoning_fallbacks:
+            return await create(**request_kwargs)
+
+        response, fallback_error = await call_with_reasoning_fallback(
+            create=create,
+            request_kwargs=request_kwargs,
+            reasoning_kwargs=reasoning_kwargs,
+            drop_when_reasoning=drop_when_reasoning,
+            add_when_reasoning=add_when_reasoning,
+        )
+        if fallback_error:
+            self._reasoning_fallbacks.add(fallback_key)
+            logger.warning(
+                "Model rejected reasoning setting; retried with model default "
+                "(model=%s api_style=%s reasoning_effort=%s error=%s)",
+                model,
+                api_style,
+                reasoning_effort,
+                fallback_error,
+            )
+        return response
 
     @staticmethod
     def _extract_response_text(response) -> str:

@@ -17,6 +17,7 @@ from telegram.ext import (
 from app.config import Settings, load_settings
 from app.db import Database
 from app.llm import OpenAISummarizer
+from app.reasoning import normalize_reasoning_effort
 from app.summary_format import build_transcript
 from app.time_utils import compute_next_run_utc, parse_timezone, to_iso, utc_now
 
@@ -37,6 +38,7 @@ class SummaryBot:
             default_cron_expr=settings.default_cron_expr,
             default_model=settings.default_model,
             default_api_style=settings.default_api_style,
+            default_reasoning_effort=settings.default_reasoning_effort,
         )
         self.summarizer = OpenAISummarizer(
             api_key=settings.openai_api_key,
@@ -64,6 +66,7 @@ class SummaryBot:
             "/set_timezone <tz> - 設定時區 (僅擁有者)\n"
             "/set_model <model> - 設定模型 (僅擁有者)\n"
             "/set_api_style <auto|responses|chat> - 設定 API 風格 (僅擁有者)\n"
+            "/set_reasoning <default|none|minimal|low|medium|high|xhigh|max> - 設定 reasoning (僅擁有者)\n"
             "/set_auto <on|off> - 開關自動摘要 (僅擁有者)\n"
             "\n"
             "提醒：請在 BotFather 關閉 privacy mode，才能接收群組完整訊息。"
@@ -85,6 +88,7 @@ class SummaryBot:
             f"auto: {'on' if settings.auto_enabled else 'off'}\n"
             f"model: {settings.model}\n"
             f"api_style: {settings.api_style}\n"
+            f"reasoning_effort: {settings.reasoning_effort}\n"
             f"min_messages_to_summary: {self.settings.min_messages_to_summary}\n"
             f"max_summary_gap_hours: {self.settings.max_summary_gap_hours}\n"
             f"openai_max_output_tokens: {self.settings.openai_max_output_tokens}\n"
@@ -201,6 +205,28 @@ class SummaryBot:
         updated = await self.db.update_chat_settings(chat.id, auto_enabled=(value == "on"))
         await message.reply_text(f"自動摘要已設為 {'on' if updated.auto_enabled else 'off'}")
 
+    async def set_reasoning(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_owner(update):
+            return
+        message = update.effective_message
+        chat = update.effective_chat
+        if not message or not chat:
+            return
+
+        try:
+            value = normalize_reasoning_effort(" ".join(context.args))
+        except ValueError:
+            await message.reply_text(
+                "用法：/set_reasoning <default|none|minimal|low|medium|high|xhigh|max>"
+            )
+            return
+
+        updated = await self.db.update_chat_settings(chat.id, reasoning_effort=value)
+        await message.reply_text(
+            f"已更新 reasoning_effort 為 `{updated.reasoning_effort}`；"
+            "若目前模型不支援，產生摘要時會自動 fallback 到模型預設。"
+        )
+
     async def manual_summary(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
             return
@@ -305,10 +331,11 @@ class SummaryBot:
             chat_username=chat_username,
         )
         logger.info(
-            "Start summary generation (chat_id=%s model=%s api_style=%s pending_total=%s transcript_chars=%s)",
+            "Start summary generation (chat_id=%s model=%s api_style=%s reasoning_effort=%s pending_total=%s transcript_chars=%s)",
             chat_id,
             settings.model,
             settings.api_style,
+            settings.reasoning_effort,
             total_count,
             len(transcript),
         )
@@ -316,6 +343,7 @@ class SummaryBot:
             transcript=transcript,
             model=settings.model,
             api_style=settings.api_style,
+            reasoning_effort=settings.reasoning_effort,
         )
 
         full_text = summary_text.strip()
@@ -443,6 +471,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("set_timezone", bot.set_timezone))
     application.add_handler(CommandHandler("set_model", bot.set_model))
     application.add_handler(CommandHandler("set_api_style", bot.set_api_style))
+    application.add_handler(CommandHandler("set_reasoning", bot.set_reasoning))
     application.add_handler(CommandHandler("set_auto", bot.set_auto))
     application.add_handler(
         MessageHandler(filters.ALL & ~filters.COMMAND, bot.capture_message),
