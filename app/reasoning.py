@@ -14,15 +14,11 @@ def normalize_reasoning_effort(value: str) -> str:
     return normalized
 
 
-def reasoning_request_kwargs(api_style: str, reasoning_effort: str) -> dict:
+def reasoning_request_kwargs(reasoning_effort: str) -> dict:
     effort = normalize_reasoning_effort(reasoning_effort)
     if effort == "default":
         return {}
-    if api_style == "responses":
-        return {"reasoning": {"effort": effort}}
-    if api_style == "chat":
-        return {"reasoning_effort": effort}
-    raise ValueError(f"Unsupported API style: {api_style}")
+    return {"reasoning": {"effort": effort}}
 
 
 def is_reasoning_unsupported_error(exc: Exception) -> bool:
@@ -43,13 +39,8 @@ async def call_with_reasoning_fallback(
     create,
     request_kwargs: dict,
     reasoning_kwargs: dict,
-    drop_when_reasoning: tuple[str, ...] = (),
-    add_when_reasoning: dict | None = None,
 ) -> tuple[object, Exception | None]:
     reasoning_request = dict(request_kwargs)
-    for key in drop_when_reasoning:
-        reasoning_request.pop(key, None)
-    reasoning_request.update(add_when_reasoning or {})
     reasoning_request.update(reasoning_kwargs)
 
     try:

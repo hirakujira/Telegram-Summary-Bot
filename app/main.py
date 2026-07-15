@@ -37,7 +37,6 @@ class SummaryBot:
             default_timezone=settings.default_timezone,
             default_cron_expr=settings.default_cron_expr,
             default_model=settings.default_model,
-            default_api_style=settings.default_api_style,
             default_reasoning_effort=settings.default_reasoning_effort,
         )
         self.summarizer = OpenAISummarizer(
@@ -65,7 +64,6 @@ class SummaryBot:
             "/set_schedule <cron> - 設定排程 (僅擁有者)\n"
             "/set_timezone <tz> - 設定時區 (僅擁有者)\n"
             "/set_model <model> - 設定模型 (僅擁有者)\n"
-            "/set_api_style <auto|responses|chat> - 設定 API 風格 (僅擁有者)\n"
             "/set_reasoning <default|none|minimal|low|medium|high|xhigh|max> - 設定 reasoning (僅擁有者)\n"
             "/set_auto <on|off> - 開關自動摘要 (僅擁有者)\n"
             "\n"
@@ -87,7 +85,6 @@ class SummaryBot:
             f"schedule(cron): {settings.cron_expr}\n"
             f"auto: {'on' if settings.auto_enabled else 'off'}\n"
             f"model: {settings.model}\n"
-            f"api_style: {settings.api_style}\n"
             f"reasoning_effort: {settings.reasoning_effort}\n"
             f"min_messages_to_summary: {self.settings.min_messages_to_summary}\n"
             f"max_summary_gap_hours: {self.settings.max_summary_gap_hours}\n"
@@ -172,22 +169,6 @@ class SummaryBot:
 
         updated = await self.db.update_chat_settings(chat.id, model=model)
         await message.reply_text(f"已更新模型為 `{updated.model}`")
-
-    async def set_api_style(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not await self._assert_owner(update):
-            return
-        message = update.effective_message
-        chat = update.effective_chat
-        if not message or not chat:
-            return
-
-        value = " ".join(context.args).strip().lower()
-        if value not in {"auto", "responses", "chat"}:
-            await message.reply_text("用法：/set_api_style <auto|responses|chat>")
-            return
-
-        updated = await self.db.update_chat_settings(chat.id, api_style=value)
-        await message.reply_text(f"已更新 api_style 為 `{updated.api_style}`")
 
     async def set_auto(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
@@ -331,10 +312,9 @@ class SummaryBot:
             chat_username=chat_username,
         )
         logger.info(
-            "Start summary generation (chat_id=%s model=%s api_style=%s reasoning_effort=%s pending_total=%s transcript_chars=%s)",
+            "Start summary generation (chat_id=%s model=%s reasoning_effort=%s pending_total=%s transcript_chars=%s)",
             chat_id,
             settings.model,
-            settings.api_style,
             settings.reasoning_effort,
             total_count,
             len(transcript),
@@ -342,17 +322,15 @@ class SummaryBot:
         summary_text = await self.summarizer.summarize(
             transcript=transcript,
             model=settings.model,
-            api_style=settings.api_style,
             reasoning_effort=settings.reasoning_effort,
         )
 
         full_text = summary_text.strip()
         if not full_text:
             logger.error(
-                "Summary generation returned empty text for chat %s (model=%s, api_style=%s)",
+                "Summary generation returned empty text for chat %s (model=%s)",
                 chat_id,
                 settings.model,
-                settings.api_style,
             )
             return False
 
@@ -470,7 +448,6 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("set_schedule", bot.set_schedule))
     application.add_handler(CommandHandler("set_timezone", bot.set_timezone))
     application.add_handler(CommandHandler("set_model", bot.set_model))
-    application.add_handler(CommandHandler("set_api_style", bot.set_api_style))
     application.add_handler(CommandHandler("set_reasoning", bot.set_reasoning))
     application.add_handler(CommandHandler("set_auto", bot.set_auto))
     application.add_handler(

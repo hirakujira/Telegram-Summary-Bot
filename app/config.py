@@ -14,7 +14,6 @@ class Settings:
     default_timezone: str = "UTC+8"
     default_cron_expr: str = "0 9 * * *"
     default_model: str = "gpt-5.6-luna"
-    default_api_style: str = "auto"
     default_reasoning_effort: str = "default"
     sqlite_path: str = "/app/data/bot.db"
     max_messages_per_summary: int = 300
@@ -40,7 +39,6 @@ def load_settings() -> Settings:
         default_timezone=os.getenv("DEFAULT_TIMEZONE", "UTC+8"),
         default_cron_expr=os.getenv("DEFAULT_CRON_EXPR", "0 9 * * *"),
         default_model=os.getenv("DEFAULT_MODEL", "gpt-5.6-luna"),
-        default_api_style=os.getenv("DEFAULT_API_STYLE", "auto"),
         default_reasoning_effort=normalize_reasoning_effort(
             os.getenv("DEFAULT_REASONING_EFFORT", "default")
         ),

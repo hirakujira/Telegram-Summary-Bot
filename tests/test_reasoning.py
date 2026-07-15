@@ -32,17 +32,12 @@ class ReasoningTests(unittest.TestCase):
             normalize_reasoning_effort("extreme")
 
     def test_default_omits_reasoning_parameter(self) -> None:
-        self.assertEqual(reasoning_request_kwargs("responses", "default"), {})
-        self.assertEqual(reasoning_request_kwargs("chat", "default"), {})
+        self.assertEqual(reasoning_request_kwargs("default"), {})
 
-    def test_builds_api_specific_reasoning_parameters(self) -> None:
+    def test_builds_responses_reasoning_parameter(self) -> None:
         self.assertEqual(
-            reasoning_request_kwargs("responses", "low"),
+            reasoning_request_kwargs("low"),
             {"reasoning": {"effort": "low"}},
-        )
-        self.assertEqual(
-            reasoning_request_kwargs("chat", "low"),
-            {"reasoning_effort": "low"},
         )
 
     def test_detects_reasoning_parameter_error(self) -> None:
@@ -66,7 +61,7 @@ class ReasoningFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         response, fallback_error = await call_with_reasoning_fallback(
             create=create,
-            request_kwargs={"model": "gpt-4o-mini", "input": "hello"},
+            request_kwargs={"model": "unsupported-model", "input": "hello"},
             reasoning_kwargs={"reasoning": {"effort": "low"}},
         )
 
@@ -90,33 +85,6 @@ class ReasoningFallbackTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(calls), 1)
-
-    async def test_chat_reasoning_uses_completion_tokens_then_restores_fallback(self) -> None:
-        calls = []
-
-        async def create(**kwargs):
-            calls.append(kwargs)
-            if len(calls) == 1:
-                raise FakeAPIError("Unsupported value", param="reasoning_effort")
-            return "fallback response"
-
-        await call_with_reasoning_fallback(
-            create=create,
-            request_kwargs={
-                "model": "example-model",
-                "max_tokens": 1800,
-                "temperature": 0.7,
-            },
-            reasoning_kwargs={"reasoning_effort": "high"},
-            drop_when_reasoning=("max_tokens", "temperature"),
-            add_when_reasoning={"max_completion_tokens": 1800},
-        )
-
-        self.assertNotIn("max_tokens", calls[0])
-        self.assertNotIn("temperature", calls[0])
-        self.assertEqual(calls[0]["max_completion_tokens"], 1800)
-        self.assertEqual(calls[1]["max_tokens"], 1800)
-        self.assertEqual(calls[1]["temperature"], 0.7)
 
 
 if __name__ == "__main__":

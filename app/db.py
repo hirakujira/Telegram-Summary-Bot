@@ -14,7 +14,6 @@ class ChatSettings:
     cron_expr: str
     auto_enabled: bool
     model: str
-    api_style: str
     reasoning_effort: str
     next_run_at_utc: str
 
@@ -26,14 +25,12 @@ class Database:
         default_timezone: str,
         default_cron_expr: str,
         default_model: str,
-        default_api_style: str,
         default_reasoning_effort: str,
     ):
         self.path = path
         self.default_timezone = default_timezone
         self.default_cron_expr = default_cron_expr
         self.default_model = default_model
-        self.default_api_style = default_api_style
         self.default_reasoning_effort = default_reasoning_effort
         self.conn: aiosqlite.Connection | None = None
 
@@ -49,7 +46,7 @@ class Database:
               cron_expr TEXT NOT NULL,
               auto_enabled INTEGER NOT NULL DEFAULT 1,
               model TEXT NOT NULL,
-              api_style TEXT NOT NULL,
+              api_style TEXT NOT NULL DEFAULT 'responses',
               reasoning_effort TEXT NOT NULL DEFAULT 'default',
               next_run_at_utc TEXT NOT NULL,
               updated_at_utc TEXT NOT NULL
@@ -82,6 +79,9 @@ class Database:
                 "ALTER TABLE chat_settings "
                 "ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'default'"
             )
+        await self.conn.execute(
+            "UPDATE chat_settings SET api_style = 'responses' WHERE api_style <> 'responses'"
+        )
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -106,14 +106,13 @@ class Database:
               chat_id, timezone, cron_expr, auto_enabled, model, api_style,
               reasoning_effort, next_run_at_utc, updated_at_utc
             )
-            VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, 1, ?, 'responses', ?, ?, ?)
             """,
             (
                 chat_id,
                 self.default_timezone,
                 self.default_cron_expr,
                 self.default_model,
-                self.default_api_style,
                 self.default_reasoning_effort,
                 to_iso(next_run),
                 now,
@@ -131,7 +130,6 @@ class Database:
             cron_expr=self.default_cron_expr,
             auto_enabled=True,
             model=self.default_model,
-            api_style=self.default_api_style,
             reasoning_effort=self.default_reasoning_effort,
             next_run_at_utc=to_iso(next_run),
         )
@@ -155,7 +153,6 @@ class Database:
         cron_expr: str | None = None,
         auto_enabled: bool | None = None,
         model: str | None = None,
-        api_style: str | None = None,
         reasoning_effort: str | None = None,
         recompute_next_run: bool = False,
     ) -> ChatSettings:
@@ -165,7 +162,6 @@ class Database:
         new_cron_expr = cron_expr if cron_expr is not None else settings.cron_expr
         new_auto_enabled = settings.auto_enabled if auto_enabled is None else auto_enabled
         new_model = model if model is not None else settings.model
-        new_api_style = api_style if api_style is not None else settings.api_style
         new_reasoning_effort = (
             reasoning_effort if reasoning_effort is not None else settings.reasoning_effort
         )
@@ -178,7 +174,7 @@ class Database:
         await self.conn.execute(
             """
             UPDATE chat_settings
-            SET timezone = ?, cron_expr = ?, auto_enabled = ?, model = ?, api_style = ?,
+            SET timezone = ?, cron_expr = ?, auto_enabled = ?, model = ?,
                 reasoning_effort = ?, next_run_at_utc = ?, updated_at_utc = ?
             WHERE chat_id = ?
             """,
@@ -187,7 +183,6 @@ class Database:
                 new_cron_expr,
                 1 if new_auto_enabled else 0,
                 new_model,
-                new_api_style,
                 new_reasoning_effort,
                 new_next_run,
                 to_iso(utc_now()),
@@ -341,7 +336,6 @@ class Database:
             cron_expr=row["cron_expr"],
             auto_enabled=bool(row["auto_enabled"]),
             model=row["model"],
-            api_style=row["api_style"],
             reasoning_effort=row["reasoning_effort"],
             next_run_at_utc=row["next_run_at_utc"],
         )

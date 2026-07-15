@@ -7,7 +7,7 @@
 - 排除機器人、貼圖、圖片、影音類型訊息
 - 只允許指定擁有者調整排程與參數
 - SQLite 儲存訊息與摘要進度
-- 預設使用 `gpt-5.6-luna`，並可切換模型與 API 呼叫類型
+- 預設使用 `gpt-5.6-luna`，統一透過 Responses API 產生摘要
 - 訊息量過少時自動延後摘要，避免產生空洞內容
 - 每個摘要主題附上原始訊息連結，可直接回到相關討論點
 
@@ -53,7 +53,6 @@ docker compose up -d --build
 - `/set_schedule <cron>`: 設定 cron 排程（擁有者限定）
 - `/set_timezone <tz>`: 設定時區（擁有者限定）
 - `/set_model <model>`: 設定模型（擁有者限定）
-- `/set_api_style <auto|responses|chat>`: 設定 API 風格（擁有者限定）
 - `/set_reasoning <default|none|minimal|low|medium|high|xhigh|max>`: 設定 reasoning 程度（擁有者限定）
 - `/set_auto <on|off>`: 開關自動摘要（擁有者限定）
 
@@ -76,15 +75,13 @@ docker compose up -d --build
 - `UTC+8`
 - `Asia/Taipei`
 
-## 6. OpenAI API 風格
+## 6. OpenAI Responses API
 
-- `auto`: 模型名稱以 `gpt-5` 開頭時用 Responses API，其餘用 Chat Completions API
-- `responses`: 強制用 Responses API
-- `chat`: 強制用 Chat Completions API
+所有摘要都使用 Responses API，不再提供 Chat Completions 或舊版 GPT-4 呼叫路徑。
 
-`OPENAI_MAX_OUTPUT_TOKENS` 會套用在單次摘要請求（Responses 的 `max_output_tokens` / Chat 的 `max_tokens`；Chat 啟用 reasoning 時使用 `max_completion_tokens`）。
+`OPENAI_MAX_OUTPUT_TOKENS` 會套用為 Responses API 的 `max_output_tokens`。
 
-Reasoning 設定會依 API 風格分別傳成 Responses API 的 `reasoning.effort` 或 Chat Completions 的 `reasoning_effort`。若模型或指定程度不支援，Bot 會移除 reasoning 設定並以模型預設值重試；`default` 則永遠不傳 reasoning 參數。
+Reasoning 設定會傳成 Responses API 的 `reasoning.effort`。若模型或指定程度不支援，Bot 會移除 reasoning 設定並以模型預設值重試；`default` 則永遠不傳 reasoning 參數。
 
 ## 7. 資料儲存
 
