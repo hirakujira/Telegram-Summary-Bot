@@ -17,6 +17,7 @@ from telegram.ext import (
 from app.config import Settings, load_settings
 from app.db import Database
 from app.llm import OpenAISummarizer
+from app.summary_format import build_transcript
 from app.time_utils import compute_next_run_utc, parse_timezone, to_iso, utc_now
 
 
@@ -291,7 +292,7 @@ class SummaryBot:
         ):
             return False
 
-        chat_title = await self._resolve_chat_title(chat_id)
+        chat_title, chat_username = await self._resolve_chat_metadata(chat_id)
         summary_start = self._format_summary_date(rows[0]["created_at_utc"])
         summary_end = self._format_summary_date(rows[-1]["created_at_utc"])
         summary_range = f"{summary_start} to {summary_end}"
@@ -300,6 +301,8 @@ class SummaryBot:
             total_count=total_count,
             chat_title=chat_title,
             summary_range=summary_range,
+            chat_id=chat_id,
+            chat_username=chat_username,
         )
         logger.info(
             "Start summary generation (chat_id=%s model=%s api_style=%s pending_total=%s transcript_chars=%s)",
@@ -326,7 +329,7 @@ class SummaryBot:
             return False
 
         try:
-            await self.application.bot.send_message(chat_id=chat_id, text=full_text)
+            await self.application.bot.send_message(chat_id=chat_id, text=full_text, parse_mode="Markdown")
         except Exception as exc:  # noqa: BLE001
             logger.exception("Send message failed for chat %s: %s", chat_id, exc)
             return False
@@ -370,36 +373,32 @@ class SummaryBot:
         )
 
     @staticmethod
-    def _build_transcript(*, rows: list, total_count: int, chat_title: str, summary_range: str) -> str:
-        lines = []
-        lines.append("[摘要中繼資料]")
-        lines.append(f"群組名稱: {chat_title}")
-        lines.append(f"摘要區間: {summary_range}")
-        lines.append(f"訊息總數: {total_count}")
-        lines.append(f"提供給模型的訊息數: {len(rows)}")
-        lines.append("")
+    def _build_transcript(
+        *,
+        rows: list,
+        total_count: int,
+        chat_title: str,
+        summary_range: str,
+        chat_id: int,
+        chat_username: str | None,
+    ) -> str:
+        return build_transcript(
+            rows=rows,
+            total_count=total_count,
+            chat_title=chat_title,
+            summary_range=summary_range,
+            chat_id=chat_id,
+            chat_username=chat_username,
+        )
 
-        if total_count > len(rows):
-            lines.append(
-                f"注意：本次共 {total_count} 則訊息，為控制長度僅摘要最後 {len(rows)} 則。"
-            )
-            lines.append("")
-
-        lines.append("[對話紀錄]")
-        for row in rows:
-            lines.append(f"[{row['created_at_utc']}] {row['user_name']}: {row['text']}")
-
-        return "\n".join(lines)
-
-    async def _resolve_chat_title(self, chat_id: int) -> str:
+    async def _resolve_chat_metadata(self, chat_id: int) -> tuple[str, str | None]:
         try:
             chat = await self.application.bot.get_chat(chat_id)
-            title = getattr(chat, "title", None)
-            if title:
-                return title
+            title = getattr(chat, "title", None) or f"Chat {chat_id}"
+            return title, getattr(chat, "username", None)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to resolve chat title for %s: %s", chat_id, exc)
-        return f"Chat {chat_id}"
+            logger.warning("Failed to resolve chat metadata for %s: %s", chat_id, exc)
+        return f"Chat {chat_id}", None
 
     @staticmethod
     def _format_summary_date(iso_timestamp: str) -> str:
