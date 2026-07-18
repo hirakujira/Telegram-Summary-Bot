@@ -19,7 +19,7 @@ from app.db import Database
 from app.llm import OpenAISummarizer
 from app.reasoning import normalize_reasoning_effort
 from app.response_style import normalize_response_style
-from app.summary_format import build_transcript
+from app.summary_format import build_transcript, format_summary_for_telegram
 from app.time_utils import compute_next_run_utc, parse_timezone, to_iso, utc_now
 
 
@@ -347,7 +347,7 @@ class SummaryBot:
             response_style=settings.response_style,
         )
 
-        full_text = summary_text.strip()
+        full_text = format_summary_for_telegram(summary_text)
         if not full_text:
             logger.error(
                 "Summary generation returned empty text for chat %s (model=%s)",
@@ -357,7 +357,11 @@ class SummaryBot:
             return False
 
         try:
-            await self.application.bot.send_message(chat_id=chat_id, text=full_text, parse_mode="Markdown")
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=full_text,
+                parse_mode="HTML",
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Send message failed for chat %s: %s", chat_id, exc)
             return False
