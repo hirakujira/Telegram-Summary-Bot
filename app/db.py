@@ -15,6 +15,7 @@ class ChatSettings:
     auto_enabled: bool
     model: str
     reasoning_effort: str
+    response_style: str
     next_run_at_utc: str
 
 
@@ -48,6 +49,7 @@ class Database:
               model TEXT NOT NULL,
               api_style TEXT NOT NULL DEFAULT 'responses',
               reasoning_effort TEXT NOT NULL DEFAULT 'default',
+              response_style TEXT NOT NULL DEFAULT 'normal',
               next_run_at_utc TEXT NOT NULL,
               updated_at_utc TEXT NOT NULL
             );
@@ -79,8 +81,20 @@ class Database:
                 "ALTER TABLE chat_settings "
                 "ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'default'"
             )
+        if "response_style" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE chat_settings "
+                "ADD COLUMN response_style TEXT NOT NULL DEFAULT 'normal'"
+            )
         await self.conn.execute(
             "UPDATE chat_settings SET api_style = 'responses' WHERE api_style <> 'responses'"
+        )
+        await self.conn.execute(
+            """
+            UPDATE chat_settings
+            SET response_style = 'normal'
+            WHERE response_style NOT IN ('normal', 'funny', 'roast')
+            """
         )
         await self.conn.commit()
 
@@ -104,9 +118,9 @@ class Database:
             """
             INSERT INTO chat_settings(
               chat_id, timezone, cron_expr, auto_enabled, model, api_style,
-              reasoning_effort, next_run_at_utc, updated_at_utc
+              reasoning_effort, response_style, next_run_at_utc, updated_at_utc
             )
-            VALUES(?, ?, ?, 1, ?, 'responses', ?, ?, ?)
+            VALUES(?, ?, ?, 1, ?, 'responses', ?, 'normal', ?, ?)
             """,
             (
                 chat_id,
@@ -131,6 +145,7 @@ class Database:
             auto_enabled=True,
             model=self.default_model,
             reasoning_effort=self.default_reasoning_effort,
+            response_style="normal",
             next_run_at_utc=to_iso(next_run),
         )
 
@@ -154,6 +169,7 @@ class Database:
         auto_enabled: bool | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
+        response_style: str | None = None,
         recompute_next_run: bool = False,
     ) -> ChatSettings:
         settings = await self.get_chat_settings(chat_id)
@@ -165,6 +181,9 @@ class Database:
         new_reasoning_effort = (
             reasoning_effort if reasoning_effort is not None else settings.reasoning_effort
         )
+        new_response_style = (
+            response_style if response_style is not None else settings.response_style
+        )
         new_next_run = settings.next_run_at_utc
 
         if recompute_next_run:
@@ -175,7 +194,7 @@ class Database:
             """
             UPDATE chat_settings
             SET timezone = ?, cron_expr = ?, auto_enabled = ?, model = ?,
-                reasoning_effort = ?, next_run_at_utc = ?, updated_at_utc = ?
+                reasoning_effort = ?, response_style = ?, next_run_at_utc = ?, updated_at_utc = ?
             WHERE chat_id = ?
             """,
             (
@@ -184,6 +203,7 @@ class Database:
                 1 if new_auto_enabled else 0,
                 new_model,
                 new_reasoning_effort,
+                new_response_style,
                 new_next_run,
                 to_iso(utc_now()),
                 chat_id,
@@ -337,5 +357,6 @@ class Database:
             auto_enabled=bool(row["auto_enabled"]),
             model=row["model"],
             reasoning_effort=row["reasoning_effort"],
+            response_style=row["response_style"],
             next_run_at_utc=row["next_run_at_utc"],
         )

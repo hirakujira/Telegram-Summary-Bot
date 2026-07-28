@@ -5,6 +5,7 @@ import logging
 from openai import AsyncOpenAI
 
 from app.reasoning import call_with_reasoning_fallback, reasoning_request_kwargs
+from app.response_style import normalize_response_style
 
 logger = logging.getLogger("telegram-summary-bot")
 
@@ -39,6 +40,20 @@ SYSTEM_PROMPT = """你是 Telegram 群組的摘要編輯，請用繁體中文輸
 11) 若訊息太少，章節可以減少，但仍維持同樣結構。
 """
 
+STYLE_PROMPTS = {
+    "normal": """回應風格：一般。
+保持輕鬆自然的語氣，優先清楚傳達討論重點。""",
+    "funny": """回應風格：搞笑。
+可使用活潑的標題、適量笑點或比喻，讓摘要更有趣；笑點只能基於對話內容，不得杜撰、誇大或取笑個人。""",
+    "roast": """回應風格：毒舌（幽默吐槽）。
+可對對話中的事件、觀點或群組現象做機智但友善的吐槽，但不得人身攻擊、貶低任何人，或評論外貌、身分與敏感特徵。吐槽不能取代重點，也不得把推測寫成事實。""",
+}
+
+
+def build_system_prompt(response_style: str) -> str:
+    style = normalize_response_style(response_style)
+    return f"{SYSTEM_PROMPT}\n{STYLE_PROMPTS[style]}"
+
 
 class OpenAISummarizer:
     def __init__(self, api_key: str, max_output_tokens: int):
@@ -52,12 +67,14 @@ class OpenAISummarizer:
         transcript: str,
         model: str,
         reasoning_effort: str,
+        response_style: str,
     ) -> str:
         return await self._summarize_via_responses(
             transcript=transcript,
             model=model,
             max_output_tokens=self.max_output_tokens,
             reasoning_effort=reasoning_effort,
+            response_style=response_style,
         )
 
     async def _summarize_via_responses(
@@ -67,13 +84,19 @@ class OpenAISummarizer:
         model: str,
         max_output_tokens: int,
         reasoning_effort: str,
+        response_style: str,
     ) -> str:
         request_kwargs = {
             "model": model,
             "input": [
                 {
                     "role": "system",
-                    "content": [{"type": "input_text", "text": SYSTEM_PROMPT}],
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": build_system_prompt(response_style),
+                        }
+                    ],
                 },
                 {
                     "role": "user",
