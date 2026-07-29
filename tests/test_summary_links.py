@@ -111,13 +111,14 @@ class SummaryLinkTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "[訊息 ID: 41][討論連結: https://t.me/c/1234567890/41]",
+            "[討論連結: https://t.me/c/1234567890/41]",
             transcript,
         )
         self.assertIn(
-            "[訊息 ID: 42][討論連結: https://t.me/c/1234567890/42]",
+            "[討論連結: https://t.me/c/1234567890/42]",
             transcript,
         )
+        self.assertNotIn("訊息 ID", transcript)
 
 
 if __name__ == "__main__":

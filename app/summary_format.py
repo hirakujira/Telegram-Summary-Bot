@@ -122,9 +122,7 @@ def build_transcript(
             message_id=row["message_id"],
             chat_username=chat_username,
         )
-        source = f"[訊息 ID: {row['message_id']}]"
-        if message_link:
-            source += f"[討論連結: {message_link}]"
+        source = f"[討論連結: {message_link}]" if message_link else ""
         lines.append(
             f"[{row['created_at_utc']}]{source} {row['user_name']}: {row['text']}"
         )
