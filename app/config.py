@@ -19,6 +19,7 @@ class Settings:
     max_messages_per_summary: int = 300
     min_messages_to_summary: int = 8
     max_summary_gap_hours: int = 24
+    preview_window_hours: int = 24
     openai_max_output_tokens: int = 1800
 
 
@@ -46,5 +47,6 @@ def load_settings() -> Settings:
         max_messages_per_summary=int(os.getenv("MAX_MESSAGES_PER_SUMMARY", "300")),
         min_messages_to_summary=int(os.getenv("MIN_MESSAGES_TO_SUMMARY", "8")),
         max_summary_gap_hours=int(os.getenv("MAX_SUMMARY_GAP_HOURS", "24")),
+        preview_window_hours=int(os.getenv("PREVIEW_WINDOW_HOURS", "24")),
         openai_max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "1800")),
     )

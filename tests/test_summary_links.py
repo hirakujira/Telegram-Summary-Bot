@@ -4,6 +4,7 @@ import unittest
 
 from app.summary_format import (
     build_message_link,
+    build_preview_header,
     build_transcript,
     format_summary_for_telegram,
 )
@@ -56,6 +57,19 @@ class SummaryLinkTests(unittest.TestCase):
         self.assertIn(
             "[💬 回到討論](https://example.com/phishing)",
             formatted,
+        )
+
+    def test_preview_header_identifies_the_group_and_escapes_the_title(self) -> None:
+        header = build_preview_header(
+            chat_title="測試 <群組> & 夥伴",
+            chat_id=-1001234567890,
+            window_hours=24,
+        )
+
+        self.assertIn("🔍 <b>預覽（未發佈到群組）</b>", header)
+        self.assertIn(
+            "<code>測試 &lt;群組&gt; &amp; 夥伴 · chat_id -1001234567890 · 過去 24 小時</code>",
+            header,
         )
 
     def test_builds_public_group_link(self) -> None:

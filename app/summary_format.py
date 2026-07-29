@@ -50,6 +50,11 @@ def format_summary_for_telegram(summary_text: str) -> str:
     return "\n".join(output)
 
 
+def build_preview_header(*, chat_title: str, chat_id: int, window_hours: int) -> str:
+    metadata = escape(f"{chat_title} · chat_id {chat_id} · 過去 {window_hours} 小時")
+    return f"🔍 <b>預覽（未發佈到群組）</b>\n<code>{metadata}</code>"
+
+
 def _format_summary_header(line: str) -> str:
     match = _SUMMARY_HEADER_PATTERN.fullmatch(line)
     if not match:

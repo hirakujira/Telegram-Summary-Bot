@@ -15,11 +15,15 @@ from telegram.ext import (
 )
 
 from app.config import Settings, load_settings
-from app.db import Database
+from app.db import ChatSettings, Database
 from app.llm import OpenAISummarizer
 from app.reasoning import normalize_reasoning_effort
 from app.response_style import normalize_response_style
-from app.summary_format import build_transcript, format_summary_for_telegram
+from app.summary_format import (
+    build_preview_header,
+    build_transcript,
+    format_summary_for_telegram,
+)
 from app.time_utils import compute_next_run_utc, parse_timezone, to_iso, utc_now
 
 
@@ -61,6 +65,7 @@ class SummaryBot:
             "已啟動。\n"
             "可用指令：\n"
             "/summary - 立即產生摘要\n"
+            f"/preview - 私訊預覽過去 {self.settings.preview_window_hours} 小時摘要 (僅擁有者)\n"
             "/status - 查看目前設定\n"
             "/set_schedule <cron> - 設定排程 (僅擁有者)\n"
             "/set_timezone <tz> - 設定時區 (僅擁有者)\n"
@@ -69,7 +74,8 @@ class SummaryBot:
             "/set_style <normal|funny|roast> - 設定摘要風格 (僅擁有者)\n"
             "/set_auto <on|off> - 開關自動摘要 (僅擁有者)\n"
             "\n"
-            "提醒：請在 BotFather 關閉 privacy mode，才能接收群組完整訊息。"
+            "提醒：請在 BotFather 關閉 privacy mode，才能接收群組完整訊息。\n"
+            "提醒：/preview 結果只會私訊擁有者，擁有者需先私訊 bot 一次。"
         )
 
     async def status(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -247,6 +253,70 @@ class SummaryBot:
         if not posted:
             await message.reply_text("這段期間沒有可摘要的文字訊息。")
 
+    async def preview_summary(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_owner(update):
+            return
+
+        message = update.effective_message
+        chat = update.effective_chat
+        if not message or not chat:
+            return
+
+        if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            await message.reply_text(
+                "請在要預覽的群組內輸入 /preview，預覽結果會私訊給你。"
+            )
+            return
+
+        window_hours = self.settings.preview_window_hours
+        chat_title, chat_username = await self._resolve_chat_metadata(chat.id)
+        # Probing the DM first fails fast before spending an LLM call, and the
+        # group is intentionally never used to report preview status.
+        if not await self._notify_owner(
+            f"開始產生「{chat_title}」過去 {window_hours} 小時的預覽摘要，請稍候..."
+        ):
+            return
+
+        end_time = utc_now()
+        start_time = end_time - timedelta(hours=window_hours)
+        total_count, rows = await self.db.get_messages_for_summary(
+            chat_id=chat.id,
+            from_utc_iso=to_iso(start_time),
+            to_utc_iso=to_iso(end_time),
+            limit=self.settings.max_messages_per_summary,
+        )
+
+        if not rows:
+            await self._notify_owner(
+                f"「{chat_title}」過去 {window_hours} 小時沒有可摘要的文字訊息。"
+            )
+            return
+
+        settings = await self.db.get_chat_settings(chat.id)
+        try:
+            full_text = await self._render_summary(
+                chat_id=chat.id,
+                chat_title=chat_title,
+                chat_username=chat_username,
+                settings=settings,
+                rows=rows,
+                total_count=total_count,
+                triggered_by="preview",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Preview summary failed for chat %s: %s", chat.id, exc)
+            await self._notify_owner("產生預覽摘要失敗，請稍後再試。")
+            return
+
+        if not full_text:
+            await self._notify_owner("產生預覽摘要失敗，請稍後再試。")
+            return
+
+        await self._notify_owner(
+            f"{build_preview_header(chat_title=chat_title, chat_id=chat.id, window_hours=window_hours)}\n\n{full_text}",
+            parse_mode="HTML",
+        )
+
     async def scheduler_tick(self, _: ContextTypes.DEFAULT_TYPE) -> None:
         now_iso = to_iso(utc_now())
         due_chats = await self.db.get_due_chats(now_iso)
@@ -320,40 +390,16 @@ class SummaryBot:
             return False
 
         chat_title, chat_username = await self._resolve_chat_metadata(chat_id)
-        summary_start = self._format_summary_date(rows[0]["created_at_utc"])
-        summary_end = self._format_summary_date(rows[-1]["created_at_utc"])
-        summary_range = f"{summary_start} to {summary_end}"
-        transcript = self._build_transcript(
+        full_text = await self._render_summary(
+            chat_id=chat_id,
+            chat_title=chat_title,
+            chat_username=chat_username,
+            settings=settings,
             rows=rows,
             total_count=total_count,
-            chat_title=chat_title,
-            summary_range=summary_range,
-            chat_id=chat_id,
-            chat_username=chat_username,
+            triggered_by=triggered_by,
         )
-        logger.info(
-            "Start summary generation (chat_id=%s model=%s reasoning_effort=%s response_style=%s pending_total=%s transcript_chars=%s)",
-            chat_id,
-            settings.model,
-            settings.reasoning_effort,
-            settings.response_style,
-            total_count,
-            len(transcript),
-        )
-        summary_text = await self.summarizer.summarize(
-            transcript=transcript,
-            model=settings.model,
-            reasoning_effort=settings.reasoning_effort,
-            response_style=settings.response_style,
-        )
-
-        full_text = format_summary_for_telegram(summary_text)
         if not full_text:
-            logger.error(
-                "Summary generation returned empty text for chat %s (model=%s)",
-                chat_id,
-                settings.model,
-            )
             return False
 
         try:
@@ -390,6 +436,23 @@ class SummaryBot:
             return False
         return True
 
+    async def _notify_owner(self, text: str, *, parse_mode: str | None = None) -> bool:
+        owner_id = self.settings.owner_telegram_user_id
+        try:
+            await self.application.bot.send_message(
+                chat_id=owner_id,
+                text=text,
+                parse_mode=parse_mode,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Failed to DM owner %s (owner must send /start to the bot in private first): %s",
+                owner_id,
+                exc,
+            )
+            return False
+
     @staticmethod
     def _is_excluded_message(message: Message) -> bool:
         return any(
@@ -403,6 +466,55 @@ class SummaryBot:
                 message.animation,
             ]
         )
+
+    async def _render_summary(
+        self,
+        *,
+        chat_id: int,
+        chat_title: str,
+        chat_username: str | None,
+        settings: ChatSettings,
+        rows: list,
+        total_count: int,
+        triggered_by: str,
+    ) -> str | None:
+        summary_start = self._format_summary_date(rows[0]["created_at_utc"])
+        summary_end = self._format_summary_date(rows[-1]["created_at_utc"])
+        summary_range = f"{summary_start} to {summary_end}"
+        transcript = self._build_transcript(
+            rows=rows,
+            total_count=total_count,
+            chat_title=chat_title,
+            summary_range=summary_range,
+            chat_id=chat_id,
+            chat_username=chat_username,
+        )
+        logger.info(
+            "Start summary generation (chat_id=%s triggered_by=%s model=%s reasoning_effort=%s response_style=%s pending_total=%s transcript_chars=%s)",
+            chat_id,
+            triggered_by,
+            settings.model,
+            settings.reasoning_effort,
+            settings.response_style,
+            total_count,
+            len(transcript),
+        )
+        summary_text = await self.summarizer.summarize(
+            transcript=transcript,
+            model=settings.model,
+            reasoning_effort=settings.reasoning_effort,
+            response_style=settings.response_style,
+        )
+
+        full_text = format_summary_for_telegram(summary_text)
+        if not full_text:
+            logger.error(
+                "Summary generation returned empty text for chat %s (model=%s)",
+                chat_id,
+                settings.model,
+            )
+            return None
+        return full_text
 
     @staticmethod
     def _build_transcript(
@@ -471,6 +583,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("help", bot.start))
     application.add_handler(CommandHandler("status", bot.status))
     application.add_handler(CommandHandler("summary", bot.manual_summary))
+    application.add_handler(CommandHandler("preview", bot.preview_summary))
     application.add_handler(CommandHandler("set_schedule", bot.set_schedule))
     application.add_handler(CommandHandler("set_timezone", bot.set_timezone))
     application.add_handler(CommandHandler("set_model", bot.set_model))

@@ -4,6 +4,7 @@
 
 - 自動定期發佈群組摘要
 - 手動觸發摘要 (`/summary`)
+- 擁有者專屬預覽 (`/preview`)：結果只私訊擁有者，不發佈到群組、不影響排程進度
 - 排除機器人、貼圖、圖片、影音類型訊息
 - 只允許指定擁有者調整排程與參數
 - SQLite 儲存訊息與摘要進度
@@ -28,6 +29,7 @@ cp .env.example .env
 - `DEFAULT_REASONING_EFFORT`: 預設 reasoning 程度（預設 `default`，沿用模型預設）
 - `MIN_MESSAGES_TO_SUMMARY`: 自動摘要最低訊息門檻（預設 `8`）
 - `MAX_SUMMARY_GAP_HOURS`: 若未達門檻，最多累積幾小時後仍會強制摘要（預設 `24`）
+- `PREVIEW_WINDOW_HOURS`: `/preview` 回推的時間範圍（預設 `24`）
 - `OPENAI_MAX_OUTPUT_TOKENS`: 單次摘要請求的輸出 token 上限（預設 `1800`，可用來控管預算），使用 reasonable 模型的時候因為推理會佔用 token，所以需要設大一點
 
 ## 2. 啟動
@@ -49,6 +51,7 @@ docker compose up -d --build
 
 - `/start` 或 `/help`: 顯示說明
 - `/summary`: 立即產生一次摘要（擁有者限定）
+- `/preview`: 在群組內輸入，預覽過去 `PREVIEW_WINDOW_HOURS` 小時的摘要，結果只私訊擁有者（擁有者限定）
 - `/status`: 查看當前群組設定
 - `/set_schedule <cron>`: 設定 cron 排程（擁有者限定）
 - `/set_timezone <tz>`: 設定時區（擁有者限定）
