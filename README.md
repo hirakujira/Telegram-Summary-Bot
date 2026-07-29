@@ -6,6 +6,7 @@
 - 手動觸發摘要 (`/summary`)
 - 擁有者專屬預覽 (`/preview`)：結果只私訊擁有者，不發佈到群組、不影響排程進度
 - 排除機器人、貼圖、圖片、影音類型訊息
+- 三種摘要風格：`normal` / `funny` / `roast`
 - 只允許指定擁有者調整排程與參數
 - SQLite 儲存訊息與摘要進度
 - 預設使用 `gpt-5.6-luna`，統一透過 Responses API 產生摘要
@@ -57,6 +58,7 @@ docker compose up -d --build
 - `/set_timezone <tz>`: 設定時區（擁有者限定）
 - `/set_model <model>`: 設定模型（擁有者限定）
 - `/set_reasoning <default|none|minimal|low|medium|high|xhigh|max>`: 設定 reasoning 程度（擁有者限定）
+- `/set_style <normal|funny|roast>`: 設定摘要風格（擁有者限定）
 - `/set_auto <on|off>`: 開關自動摘要（擁有者限定）
 
 ## 5. 排程格式
@@ -78,7 +80,21 @@ docker compose up -d --build
 - `UTC+8`
 - `Asia/Taipei`
 
-## 6. OpenAI Responses API
+## 6. 摘要風格
+
+用 `/set_style <normal|funny|roast>` 逐群組設定，預設 `normal`。
+
+| 風格 | 語氣 | 取材 |
+| --- | --- | --- |
+| `normal` | 中性、精簡、好讀 | 依資訊價值排序，省略寒暄與閒聊 |
+| `funny` | 活潑有梗 | 重點仍完整，笑點不取笑個人 |
+| `roast` | 台式垃圾話、毒舌開嗆 | 娛樂優先，只涵蓋最關鍵幾件事，閒聊與跳針就是素材 |
+
+風格只決定 persona、語氣與取材取向。輸出格式、「回到討論」連結白名單、不杜撰事實與 prompt injection 防護是三種風格共用的硬契約（`app/llm.py` 的 `OUTPUT_CONTRACT`），風格不能覆寫。
+
+`roast` 是群組自願開啟的娛樂模式，會直接開嗆並使用粗俗口語，只保留兩條底線：不能編造沒發生過的事，以及不針對種族、性別、性向、宗教或身心障礙等身分特徵攻擊（後者也會導致模型拒答，讓整份摘要失敗）。要調整尺度改 `app/llm.py` 的 `STYLE_PROMPTS["roast"]` 即可，不需動 `OUTPUT_CONTRACT`。
+
+## 7. OpenAI Responses API
 
 所有摘要都使用 Responses API，不再提供 Chat Completions 或舊版 GPT-4 呼叫路徑。
 
@@ -86,7 +102,7 @@ docker compose up -d --build
 
 Reasoning 設定會傳成 Responses API 的 `reasoning.effort`。若模型或指定程度不支援，Bot 會移除 reasoning 設定並以模型預設值重試；`default` 則永遠不傳 reasoning 參數。
 
-## 7. 資料儲存
+## 8. 資料儲存
 
 SQLite 預設路徑：`/app/data/bot.db`（映射到本機 `./data/bot.db`）。
 
@@ -94,7 +110,7 @@ SQLite 預設路徑：`/app/data/bot.db`（映射到本機 `./data/bot.db`）。
 
 摘要中的「回到討論」支援公開群組與超級群組；Telegram 不提供一般私人群組的訊息永久連結。
 
-## 8. 訊息過少時的策略
+## 9. 訊息過少時的策略
 
 - 手動 `/summary`：只要有訊息就會摘要（不套用最低門檻）
 - 自動摘要：若訊息數 `< MIN_MESSAGES_TO_SUMMARY`，先不發佈，繼續累積
