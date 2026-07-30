@@ -15,7 +15,7 @@ class SummaryLinkTests(unittest.TestCase):
         summary = """掌孫大集合 Summary | 2026-07-16 to 2026-07-17 | 164 則訊息
 
 1. 🧪 **測試 <主題>**
-- **Alice & Bob**：討論 API <限制>
+- **Alice & Bob**：討論 **API** <限制>
 - **Carol**：決定明天執行
 [💬 回到討論](https://t.me/c/1234567890/42)
 
@@ -33,7 +33,7 @@ class SummaryLinkTests(unittest.TestCase):
         )
         self.assertIn("<b>1. 🧪 測試 &lt;主題&gt;</b>", formatted)
         self.assertIn(
-            "• <b>Alice &amp; Bob</b>：討論 API &lt;限制&gt;",
+            "• <b>Alice &amp; Bob</b>：討論 <b>API</b> &lt;限制&gt;",
             formatted,
         )
         self.assertIn(

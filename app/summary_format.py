@@ -11,6 +11,7 @@ _SUMMARY_HEADER_PATTERN = re.compile(
 _TOPIC_PATTERN = re.compile(r"^\d+\.\s+")
 _BULLET_PATTERN = re.compile(r"^-\s+\*\*(?P<name>.+?)\*\*：\s*(?P<text>.+)$")
 _DISCUSSION_LINK_PATTERN = re.compile(r"^\[💬 回到討論\]\((?P<url>.+)\)$")
+_INLINE_BOLD_PATTERN = re.compile(r"\*\*(?P<text>.+?)\*\*")
 
 
 def format_summary_for_telegram(summary_text: str) -> str:
@@ -69,7 +70,7 @@ def _format_topic_line(line: str) -> str:
     bullet = _BULLET_PATTERN.fullmatch(line)
     if bullet:
         name = escape(bullet.group("name"))
-        text = escape(bullet.group("text"))
+        text = _format_inline_bold(bullet.group("text"))
         return f"• <b>{name}</b>：{text}"
 
     discussion_link = _DISCUSSION_LINK_PATTERN.fullmatch(line)
@@ -78,6 +79,11 @@ def _format_topic_line(line: str) -> str:
         return f'<a href="{url}">💬 回到討論</a>'
 
     return escape(line.replace("**", ""))
+
+
+def _format_inline_bold(text: str) -> str:
+    escaped = escape(text)
+    return _INLINE_BOLD_PATTERN.sub(r"<b>\g<text></b>", escaped)
 
 
 def _is_telegram_link(url: str) -> bool:
