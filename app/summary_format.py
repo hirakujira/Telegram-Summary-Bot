@@ -97,6 +97,21 @@ def build_message_link(*, chat_id: int, message_id: int, chat_username: str | No
     return None
 
 
+REPLY_LABEL_HINT = (
+    "回覆關係說明: 每則訊息開頭的 [m<編號>] 是本次摘要專用的內部代號；"
+    "[m<編號> 回覆 <代號>] 表示這則訊息在回覆哪一則，代號 w<編號> 代表被回覆的訊息不在本次範圍內。"
+    "群組可能同時進行多個話題，請優先依這些回覆關係判斷哪些訊息屬於同一串討論，"
+    "但絕對不要在輸出中提到任何代號。"
+)
+
+
+def _row_value(row, key: str):
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
 def build_transcript(
     *,
     rows: list,
@@ -106,6 +121,37 @@ def build_transcript(
     chat_id: int,
     chat_username: str | None,
 ) -> str:
+    node_labels = {row["message_id"]: f"m{index}" for index, row in enumerate(rows, start=1)}
+    outside_labels: dict[int, str] = {}
+
+    def label_for(message_id: int) -> str:
+        if message_id in node_labels:
+            return node_labels[message_id]
+        if message_id not in outside_labels:
+            outside_labels[message_id] = f"w{len(outside_labels) + 1}"
+        return outside_labels[message_id]
+
+    entries = []
+    has_reply = False
+    for row in rows:
+        message_id = row["message_id"]
+        reply_target = _row_value(row, "reply_to_message_id")
+        if reply_target and reply_target != message_id:
+            marker = f"[{node_labels[message_id]} 回覆 {label_for(reply_target)}]"
+            has_reply = True
+        else:
+            marker = f"[{node_labels[message_id]}]"
+
+        message_link = build_message_link(
+            chat_id=chat_id,
+            message_id=message_id,
+            chat_username=chat_username,
+        )
+        source = f"[討論連結: {message_link}]" if message_link else ""
+        entries.append(
+            f"{marker}[{row['created_at_utc']}]{source} {row['user_name']}: {row['text']}"
+        )
+
     lines = []
     lines.append("[摘要中繼資料]")
     lines.append(f"群組名稱: {chat_title}")
@@ -120,16 +166,11 @@ def build_transcript(
         )
         lines.append("")
 
+    if has_reply:
+        lines.append(REPLY_LABEL_HINT)
+        lines.append("")
+
     lines.append("[對話紀錄]")
-    for row in rows:
-        message_link = build_message_link(
-            chat_id=chat_id,
-            message_id=row["message_id"],
-            chat_username=chat_username,
-        )
-        source = f"[討論連結: {message_link}]" if message_link else ""
-        lines.append(
-            f"[{row['created_at_utc']}]{source} {row['user_name']}: {row['text']}"
-        )
+    lines.extend(entries)
 
     return "\n".join(lines)

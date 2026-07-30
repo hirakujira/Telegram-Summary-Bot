@@ -7,6 +7,22 @@ import aiosqlite
 from app.time_utils import compute_next_run_utc, to_iso, utc_now
 
 
+UNKNOWN_USER_NAME = "未知成員"
+
+# Display names live only in `users`, so every read resolves the current name.
+_MESSAGE_SELECT = f"""
+SELECT m.chat_id,
+       m.message_id,
+       m.user_id,
+       COALESCE(u.display_name, '{UNKNOWN_USER_NAME}') AS user_name,
+       m.text,
+       m.reply_to_message_id,
+       m.created_at_utc
+FROM messages m
+LEFT JOIN users u ON u.user_id = m.user_id
+"""
+
+
 @dataclass(slots=True)
 class ChatSettings:
     chat_id: int
@@ -60,12 +76,18 @@ class Database:
               FOREIGN KEY(chat_id) REFERENCES chat_settings(chat_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS users (
+              user_id INTEGER PRIMARY KEY,
+              display_name TEXT NOT NULL,
+              updated_at_utc TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS messages (
               chat_id INTEGER NOT NULL,
               message_id INTEGER NOT NULL,
               user_id INTEGER NOT NULL,
-              user_name TEXT NOT NULL,
               text TEXT NOT NULL,
+              reply_to_message_id INTEGER,
               created_at_utc TEXT NOT NULL,
               PRIMARY KEY(chat_id, message_id)
             );
@@ -73,6 +95,17 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_messages_chat_time
             ON messages(chat_id, created_at_utc);
             """
+        )
+        # Indexes touching reply_to_message_id are created only after migration,
+        # because a legacy `messages` table does not have that column yet.
+        await self._migrate_messages_schema()
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_chat_time "
+            "ON messages(chat_id, created_at_utc)"
+        )
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_reply "
+            "ON messages(chat_id, reply_to_message_id)"
         )
         columns_cursor = await self.conn.execute("PRAGMA table_info(chat_settings)")
         columns = {row[1] for row in await columns_cursor.fetchall()}
@@ -96,6 +129,62 @@ class Database:
             WHERE response_style NOT IN ('normal', 'funny', 'roast')
             """
         )
+        await self.conn.commit()
+
+    async def _migrate_messages_schema(self) -> None:
+        """Moves legacy per-message display names into the `users` table."""
+        assert self.conn is not None
+        cursor = await self.conn.execute("PRAGMA table_info(messages)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        if "user_name" not in columns:
+            return
+
+        try:
+            # Only the latest observed name is kept: historical names are noise.
+            await self.conn.execute(
+                """
+                INSERT OR REPLACE INTO users(user_id, display_name, updated_at_utc)
+                SELECT m.user_id, m.user_name, m.created_at_utc
+                FROM messages m
+                WHERE m.rowid = (
+                  SELECT newest.rowid
+                  FROM messages newest
+                  WHERE newest.user_id = m.user_id
+                  ORDER BY newest.created_at_utc DESC, newest.message_id DESC
+                  LIMIT 1
+                )
+                """
+            )
+            await self.conn.execute(
+                """
+                CREATE TABLE messages_migrated (
+                  chat_id INTEGER NOT NULL,
+                  message_id INTEGER NOT NULL,
+                  user_id INTEGER NOT NULL,
+                  text TEXT NOT NULL,
+                  reply_to_message_id INTEGER,
+                  created_at_utc TEXT NOT NULL,
+                  PRIMARY KEY(chat_id, message_id)
+                )
+                """
+            )
+            # Legacy rows have no reply information; it starts accumulating from now on.
+            await self.conn.execute(
+                """
+                INSERT INTO messages_migrated(
+                  chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc
+                )
+                SELECT chat_id, message_id, user_id, text, NULL, created_at_utc
+                FROM messages
+                """
+            )
+            # Dropping the table also drops its indexes; connect() recreates them.
+            await self.conn.execute("DROP TABLE messages")
+            await self.conn.execute("ALTER TABLE messages_migrated RENAME TO messages")
+        except Exception:
+            await self.conn.rollback()
+            raise
+
         await self.conn.commit()
 
     async def close(self) -> None:
@@ -247,14 +336,30 @@ class Database:
         user_name: str,
         text: str,
         created_at_utc: str,
+        reply_to_message_id: int | None = None,
     ) -> None:
         assert self.conn is not None
+        # The name is stored once per user, so a rename retroactively applies to
+        # every message that user ever sent.
         await self.conn.execute(
             """
-            INSERT OR IGNORE INTO messages(chat_id, message_id, user_id, user_name, text, created_at_utc)
+            INSERT INTO users(user_id, display_name, updated_at_utc)
+            VALUES(?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+              display_name = excluded.display_name,
+              updated_at_utc = excluded.updated_at_utc
+            WHERE users.display_name <> excluded.display_name
+            """,
+            (user_id, user_name, to_iso(utc_now())),
+        )
+        await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO messages(
+              chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc
+            )
             VALUES(?, ?, ?, ?, ?, ?)
             """,
-            (chat_id, message_id, user_id, user_name, text, created_at_utc),
+            (chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc),
         )
         await self.conn.commit()
 
@@ -280,13 +385,12 @@ class Database:
                 (chat_id, from_utc_iso, to_utc_iso),
             )
             data_cursor = await self.conn.execute(
-                """
-                SELECT *
-                FROM messages
-                WHERE chat_id = ?
-                  AND created_at_utc > ?
-                  AND created_at_utc <= ?
-                ORDER BY created_at_utc DESC
+                f"""
+                {_MESSAGE_SELECT}
+                WHERE m.chat_id = ?
+                  AND m.created_at_utc > ?
+                  AND m.created_at_utc <= ?
+                ORDER BY m.created_at_utc DESC
                 LIMIT ?
                 """,
                 (chat_id, from_utc_iso, to_utc_iso, limit),
@@ -302,12 +406,11 @@ class Database:
                 (chat_id, to_utc_iso),
             )
             data_cursor = await self.conn.execute(
-                """
-                SELECT *
-                FROM messages
-                WHERE chat_id = ?
-                  AND created_at_utc <= ?
-                ORDER BY created_at_utc DESC
+                f"""
+                {_MESSAGE_SELECT}
+                WHERE m.chat_id = ?
+                  AND m.created_at_utc <= ?
+                ORDER BY m.created_at_utc DESC
                 LIMIT ?
                 """,
                 (chat_id, to_utc_iso, limit),

@@ -34,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("telegram-summary-bot")
 
-MESSAGE_RETENTION_DAYS = 30
+MESSAGE_RETENTION_DAYS = 180
 
 
 class SummaryBot:
@@ -426,7 +426,20 @@ class SummaryBot:
             user_name=display_name,
             text=text,
             created_at_utc=to_iso(message.date),
+            reply_to_message_id=self._resolve_reply_target(message, chat.id),
         )
+
+    @staticmethod
+    def _resolve_reply_target(message: Message, chat_id: int) -> int | None:
+        reply_to = getattr(message, "reply_to_message", None)
+        if reply_to is None:
+            return None
+
+        # Quotes of messages from other chats cannot be linked to this chat's thread.
+        reply_chat = getattr(reply_to, "chat", None)
+        if reply_chat is not None and getattr(reply_chat, "id", chat_id) != chat_id:
+            return None
+        return getattr(reply_to, "message_id", None)
 
     async def generate_and_post_summary(
         self,
