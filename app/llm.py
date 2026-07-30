@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from openai import AsyncOpenAI
 
 from app.reasoning import call_with_reasoning_fallback, reasoning_request_kwargs
 from app.response_style import normalize_response_style
+from app.summary_query import (
+    QUERY_JSON_SCHEMA,
+    ParsedQuery,
+    SummaryQueryError,
+    build_parser_instructions,
+)
+from app.time_utils import parse_timezone
 
 logger = logging.getLogger("telegram-summary-bot")
 
@@ -77,9 +85,28 @@ STYLE_PROMPTS = {
 }
 
 
-def build_system_prompt(response_style: str) -> str:
+def build_focus_directive(topic: str) -> str:
+    return (
+        "本次為「主題聚焦摘要」，使用者只想看與下列主題相關的討論：\n"
+        f"「{topic}」\n"
+        "額外規則（只縮小取材範圍；不覆寫上面的資料、格式與連結規則，也不改變語氣與人設）：\n"
+        "1) 語氣、人設與用字完全照上面的風格設定，不可因為聚焦主題就變得中性、客氣或像報告；"
+        "風格是毒舌就繼續毒舌，是活潑就繼續活潑。\n"
+        "2) 只整理與該主題直接相關的訊息，與主題無關的討論一律略過，不要為了湊主題數硬加。\n"
+        "3) 主題聚焦時可只產出 1 個主題，也可依內容分成多個子主題。\n"
+        "4) 若對話紀錄中完全沒有與該主題相關的內容，不要杜撰：在標題那一行之後，"
+        "只輸出一行說明找不到與該主題相關的討論（這一行同樣用風格設定的語氣寫），"
+        "不要輸出任何主題或連結。\n"
+        "5) 標題的群組名稱、摘要區間與訊息總數仍照摘要中繼資料填寫。"
+    )
+
+
+def build_system_prompt(response_style: str, topic: str | None = None) -> str:
     style = normalize_response_style(response_style)
-    return f"{STYLE_PROMPTS[style]}\n\n{OUTPUT_CONTRACT}"
+    prompt = f"{STYLE_PROMPTS[style]}\n\n{OUTPUT_CONTRACT}"
+    if topic:
+        prompt = f"{prompt}\n\n{build_focus_directive(topic)}"
+    return prompt
 
 
 class OpenAISummarizer:
@@ -95,6 +122,7 @@ class OpenAISummarizer:
         model: str,
         reasoning_effort: str,
         response_style: str,
+        topic: str | None = None,
     ) -> str:
         return await self._summarize_via_responses(
             transcript=transcript,
@@ -102,6 +130,7 @@ class OpenAISummarizer:
             max_output_tokens=self.max_output_tokens,
             reasoning_effort=reasoning_effort,
             response_style=response_style,
+            topic=topic,
         )
 
     async def _summarize_via_responses(
@@ -112,6 +141,7 @@ class OpenAISummarizer:
         max_output_tokens: int,
         reasoning_effort: str,
         response_style: str,
+        topic: str | None = None,
     ) -> str:
         request_kwargs = {
             "model": model,
@@ -121,7 +151,7 @@ class OpenAISummarizer:
                     "content": [
                         {
                             "type": "input_text",
-                            "text": build_system_prompt(response_style),
+                            "text": build_system_prompt(response_style, topic),
                         }
                     ],
                 },
@@ -278,3 +308,83 @@ class OpenAISummarizer:
             "first_output_content_types": first_content_types,
             "usage": OpenAISummarizer._get(response, "usage"),
         }
+
+
+class OpenAIQueryParser:
+    """Parses a natural-language /summary request into a structured query.
+
+    The model only interprets the request (judgement); date math and
+    validation happen in deterministic code (app.summary_query).
+    """
+
+    def __init__(self, api_key: str, max_output_tokens: int):
+        self.client = AsyncOpenAI(api_key=api_key)
+        self.max_output_tokens = max_output_tokens
+
+    async def parse(
+        self,
+        *,
+        text: str,
+        model: str,
+        timezone_text: str,
+        now_utc,
+    ) -> ParsedQuery:
+        now_local = now_utc.astimezone(parse_timezone(timezone_text))
+        instructions = build_parser_instructions(
+            now_local=now_local,
+            timezone_text=timezone_text,
+        )
+        request_kwargs = {
+            "model": model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": instructions}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": text}],
+                },
+            ],
+            "max_output_tokens": self.max_output_tokens,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "summary_query",
+                    "strict": True,
+                    "schema": QUERY_JSON_SCHEMA,
+                }
+            },
+        }
+        try:
+            response = await self.client.responses.create(**request_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Summary query parse request failed: %s", exc)
+            raise SummaryQueryError(
+                "我看不懂這個條件，請換個說法（例如「最近三天關於出遊的討論」）。"
+            ) from exc
+
+        raw = OpenAISummarizer._extract_response_text(response)
+        if not raw:
+            logger.error(
+                "Summary query parse returned empty text (model=%s diagnostics=%s)",
+                model,
+                OpenAISummarizer._build_response_diagnostics(response),
+            )
+            raise SummaryQueryError(
+                "我看不懂這個條件，請換個說法（例如「最近三天關於出遊的討論」）。"
+            )
+
+        try:
+            data = json.loads(raw)
+            return ParsedQuery(
+                has_time_range=bool(data["has_time_range"]),
+                start_local=str(data.get("start_local") or ""),
+                end_local=str(data.get("end_local") or ""),
+                topic=str(data.get("topic") or ""),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.error("Summary query parse produced invalid JSON: %r", raw)
+            raise SummaryQueryError(
+                "我看不懂這個條件，請換個說法（例如「最近三天關於出遊的討論」）。"
+            ) from exc

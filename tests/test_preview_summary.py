@@ -27,13 +27,14 @@ class RecordingSummarizer:
         self.output = output
         self.calls: list[dict] = []
 
-    async def summarize(self, *, transcript, model, reasoning_effort, response_style):
+    async def summarize(self, *, transcript, model, reasoning_effort, response_style, topic=None):
         self.calls.append(
             {
                 "transcript": transcript,
                 "model": model,
                 "reasoning_effort": reasoning_effort,
                 "response_style": response_style,
+                "topic": topic,
             }
         )
         return self.output
