@@ -26,6 +26,7 @@ LEFT JOIN users u ON u.user_id = m.user_id
 @dataclass(slots=True)
 class ChatSettings:
     chat_id: int
+    authorized: bool
     timezone: str
     cron_expr: str
     auto_enabled: bool
@@ -59,6 +60,7 @@ class Database:
             """
             CREATE TABLE IF NOT EXISTS chat_settings (
               chat_id INTEGER PRIMARY KEY,
+              authorized INTEGER NOT NULL DEFAULT 0,
               timezone TEXT NOT NULL,
               cron_expr TEXT NOT NULL,
               auto_enabled INTEGER NOT NULL DEFAULT 1,
@@ -113,6 +115,11 @@ class Database:
             await self.conn.execute(
                 "ALTER TABLE chat_settings "
                 "ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'default'"
+            )
+        if "authorized" not in columns:
+            await self.conn.execute(
+                "ALTER TABLE chat_settings "
+                "ADD COLUMN authorized INTEGER NOT NULL DEFAULT 0"
             )
         if "response_style" not in columns:
             await self.conn.execute(
@@ -206,10 +213,10 @@ class Database:
         await self.conn.execute(
             """
             INSERT INTO chat_settings(
-              chat_id, timezone, cron_expr, auto_enabled, model, api_style,
+              chat_id, authorized, timezone, cron_expr, auto_enabled, model, api_style,
               reasoning_effort, response_style, next_run_at_utc, updated_at_utc
             )
-            VALUES(?, ?, ?, 1, ?, 'responses', ?, 'normal', ?, ?)
+            VALUES(?, 0, ?, ?, 1, ?, 'responses', ?, 'normal', ?, ?)
             """,
             (
                 chat_id,
@@ -229,6 +236,7 @@ class Database:
 
         return ChatSettings(
             chat_id=chat_id,
+            authorized=False,
             timezone=self.default_timezone,
             cron_expr=self.default_cron_expr,
             auto_enabled=True,
@@ -301,6 +309,33 @@ class Database:
         await self.conn.commit()
 
         return await self.get_chat_settings(chat_id)
+
+    async def is_chat_authorized(self, chat_id: int) -> bool:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "SELECT authorized FROM chat_settings WHERE chat_id = ?",
+            (chat_id,),
+        )
+        row = await cursor.fetchone()
+        return bool(row and row["authorized"])
+
+    async def authorize_chat(self, chat_id: int) -> ChatSettings:
+        await self.ensure_chat(chat_id)
+        assert self.conn is not None
+        await self.conn.execute(
+            "UPDATE chat_settings SET authorized = 1, updated_at_utc = ? WHERE chat_id = ?",
+            (to_iso(utc_now()), chat_id),
+        )
+        await self.conn.commit()
+        return await self.get_chat_settings(chat_id)
+
+    async def revoke_chat_authorization(self, chat_id: int) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            "UPDATE chat_settings SET authorized = 0, updated_at_utc = ? WHERE chat_id = ?",
+            (to_iso(utc_now()), chat_id),
+        )
+        await self.conn.commit()
 
     async def get_last_summarized_at(self, chat_id: int) -> str | None:
         await self.ensure_chat(chat_id)
@@ -427,7 +462,7 @@ class Database:
             """
             SELECT *
             FROM chat_settings
-            WHERE auto_enabled = 1 AND next_run_at_utc <= ?
+            WHERE authorized = 1 AND auto_enabled = 1 AND next_run_at_utc <= ?
             ORDER BY next_run_at_utc ASC
             """,
             (now_utc_iso,),
@@ -455,6 +490,7 @@ class Database:
     def _row_to_settings(row: aiosqlite.Row) -> ChatSettings:
         return ChatSettings(
             chat_id=row["chat_id"],
+            authorized=bool(row["authorized"]),
             timezone=row["timezone"],
             cron_expr=row["cron_expr"],
             auto_enabled=bool(row["auto_enabled"]),

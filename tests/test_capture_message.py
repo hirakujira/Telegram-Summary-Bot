@@ -64,6 +64,7 @@ class CaptureMessageTests(unittest.IsolatedAsyncioTestCase):
         )
         self.bot = SummaryBot(settings)
         await self.bot.db.connect()
+        await self.bot.db.authorize_chat(GROUP_ID)
 
     async def asyncTearDown(self) -> None:
         await self.bot.db.close()

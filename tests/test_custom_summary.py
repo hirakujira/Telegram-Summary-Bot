@@ -113,7 +113,7 @@ class CustomSummaryTests(unittest.IsolatedAsyncioTestCase):
         self.telegram_bot = FakeBot()
         self.bot.application = SimpleNamespace(bot=self.telegram_bot)
         await self.bot.db.connect()
-        await self.bot.db.ensure_chat(GROUP_ID)
+        await self.bot.db.authorize_chat(GROUP_ID)
 
     async def asyncTearDown(self) -> None:
         await self.bot.db.close()

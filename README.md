@@ -8,6 +8,7 @@
 - 排除機器人、貼圖、圖片、影音類型訊息
 - 三種摘要風格：`normal` / `funny` / `roast`
 - 只允許指定擁有者調整排程與參數
+- 僅處理 owner 明確授權的群組，防止被加入未知群組後收集資料
 - SQLite 儲存訊息與摘要進度
 - 預設使用 `gpt-5.6-luna`，統一透過 Responses API 產生摘要
 - 訊息量過少時自動延後摘要，避免產生空洞內容
@@ -48,6 +49,10 @@ docker compose up -d --build
 
 否則 bot 可能只會收到指令，無法做完整摘要。
 
+安全性限制：請由 `OWNER_TELEGRAM_USER_ID` 對應的帳號親自將 bot 加入群組。若由其他帳號加入，bot 會私訊通知 owner 並立刻退出，不會收集群組訊息。
+
+升級至這個版本後，既有群組會暫停授權但保留資料。請由 owner 在要繼續使用的群組內執行 `/authorize_group`，或由 owner 將 bot 移除後重新加入。
+
 ## 4. 指令
 
 - `/start` 或 `/help`: 顯示說明
@@ -60,6 +65,7 @@ docker compose up -d --build
 - `/set_reasoning <default|none|minimal|low|medium|high|xhigh|max>`: 設定 reasoning 程度（擁有者限定）
 - `/set_style <normal|funny|roast>`: 設定摘要風格（擁有者限定）
 - `/set_auto <on|off>`: 開關自動摘要（擁有者限定）
+- `/authorize_group`: 授權目前群組（擁有者限定，用於既有群組）
 
 ## 5. 排程格式
 
@@ -106,7 +112,7 @@ Reasoning 設定會傳成 Responses API 的 `reasoning.effort`。若模型或指
 
 SQLite 預設路徑：`/app/data/bot.db`（映射到本機 `./data/bot.db`）。
 
-機器人會保留近 30 天原始訊息供摘要使用。
+機器人會保留近 180 天原始訊息供摘要使用。
 
 顯示名稱存在 `users` table（`user_id` 為主鍵），`messages` 只存 `user_id`，因此成員改名後所有歷史訊息都會顯示新名字，不保留舊名字。
 

@@ -8,6 +8,7 @@ from telegram import Message, Update
 from telegram.constants import ChatType
 from telegram.ext import (
     Application,
+    ChatMemberHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -35,6 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger("telegram-summary-bot")
 
 MESSAGE_RETENTION_DAYS = 180
+ACTIVE_MEMBER_STATUSES = {"member", "administrator", "owner", "creator"}
 
 
 class SummaryBot:
@@ -66,6 +68,8 @@ class SummaryBot:
         await self.db.close()
 
     async def start(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_authorized_group(update):
+            return
         if not update.effective_message:
             return
         await update.effective_message.reply_text(
@@ -81,12 +85,30 @@ class SummaryBot:
             "/set_reasoning <default|none|minimal|low|medium|high|xhigh|max> - 設定 reasoning (僅擁有者)\n"
             "/set_style <normal|funny|roast> - 設定摘要風格 (僅擁有者)\n"
             "/set_auto <on|off> - 開關自動摘要 (僅擁有者)\n"
+            "/authorize_group - 授權目前群組 (僅擁有者)\n"
             "\n"
             "提醒：請在 BotFather 關閉 privacy mode，才能接收群組完整訊息。\n"
             "提醒：/preview 結果只會私訊擁有者，擁有者需先私訊 bot 一次。"
         )
 
+    async def authorize_group(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_owner(update):
+            return
+
+        message = update.effective_message
+        chat = update.effective_chat
+        if not message or not chat:
+            return
+        if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            await message.reply_text("請在要授權的群組內執行 /authorize_group。")
+            return
+
+        await self.db.authorize_chat(chat.id)
+        await message.reply_text("此群組已授權，機器人會開始收集訊息與執行摘要排程。")
+
     async def status(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_authorized_group(update):
+            return
         message = update.effective_message
         chat = update.effective_chat
         if not message or not chat:
@@ -113,6 +135,8 @@ class SummaryBot:
 
     async def set_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
+            return
+        if not await self._assert_authorized_group(update):
             return
         message = update.effective_message
         chat = update.effective_chat
@@ -145,6 +169,8 @@ class SummaryBot:
     async def set_timezone(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
             return
+        if not await self._assert_authorized_group(update):
+            return
         message = update.effective_message
         chat = update.effective_chat
         if not message or not chat:
@@ -174,6 +200,8 @@ class SummaryBot:
     async def set_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
             return
+        if not await self._assert_authorized_group(update):
+            return
         message = update.effective_message
         chat = update.effective_chat
         if not message or not chat:
@@ -190,6 +218,8 @@ class SummaryBot:
     async def set_auto(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
             return
+        if not await self._assert_authorized_group(update):
+            return
         message = update.effective_message
         chat = update.effective_chat
         if not message or not chat:
@@ -205,6 +235,8 @@ class SummaryBot:
 
     async def set_reasoning(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
+            return
+        if not await self._assert_authorized_group(update):
             return
         message = update.effective_message
         chat = update.effective_chat
@@ -228,6 +260,8 @@ class SummaryBot:
     async def set_style(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
             return
+        if not await self._assert_authorized_group(update):
+            return
         message = update.effective_message
         chat = update.effective_chat
         if not message or not chat:
@@ -244,6 +278,8 @@ class SummaryBot:
 
     async def manual_summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
+            return
+        if not await self._assert_authorized_group(update):
             return
 
         message = update.effective_message
@@ -316,6 +352,8 @@ class SummaryBot:
 
     async def preview_summary(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update):
+            return
+        if not await self._assert_authorized_group(update):
             return
 
         message = update.effective_message
@@ -406,6 +444,8 @@ class SummaryBot:
             return
         if user.is_bot:
             return
+        if not await self._assert_authorized_group(update):
+            return
 
         if self._is_excluded_message(message):
             return
@@ -429,6 +469,46 @@ class SummaryBot:
             reply_to_message_id=self._resolve_reply_target(message, chat.id),
         )
 
+    async def handle_my_chat_member(
+        self,
+        update: Update,
+        _: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        membership = update.my_chat_member
+        if not membership:
+            return
+
+        chat = membership.chat
+        if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            return
+
+        old_status = self._chat_member_status(membership.old_chat_member)
+        new_status = self._chat_member_status(membership.new_chat_member)
+        was_active = old_status in ACTIVE_MEMBER_STATUSES
+        is_active = new_status in ACTIVE_MEMBER_STATUSES
+
+        if not was_active and is_active:
+            added_by = membership.from_user
+            if added_by and added_by.id == self.settings.owner_telegram_user_id:
+                await self.db.authorize_chat(chat.id)
+                logger.info("Authorized group %s because owner added the bot", chat.id)
+                return
+
+            await self._notify_and_leave_unauthorized_group(
+                chat,
+                "機器人由非 owner 帳號加入",
+            )
+            return
+
+        if was_active and not is_active:
+            await self.db.revoke_chat_authorization(chat.id)
+            logger.info("Revoked authorization for group %s after bot removal", chat.id)
+
+    @staticmethod
+    def _chat_member_status(chat_member: object) -> str:
+        status = getattr(chat_member, "status", "")
+        return getattr(status, "value", status)
+
     @staticmethod
     def _resolve_reply_target(message: Message, chat_id: int) -> int | None:
         reply_to = getattr(message, "reply_to_message", None)
@@ -451,6 +531,9 @@ class SummaryBot:
         to_iso_override: str | None = None,
         advance_cursor: bool = True,
     ) -> bool:
+        if not await self.db.is_chat_authorized(chat_id):
+            logger.warning("Skip summary for unauthorized chat %s", chat_id)
+            return False
         settings = await self.db.get_chat_settings(chat_id)
         end_time = utc_now()
         end_iso = to_iso_override or to_iso(end_time)
@@ -523,6 +606,30 @@ class SummaryBot:
             await message.reply_text("你沒有權限執行這個指令。")
             return False
         return True
+
+    async def _assert_authorized_group(self, update: Update) -> bool:
+        chat = update.effective_chat
+        if not chat or chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            return True
+        if await self.db.is_chat_authorized(chat.id):
+            return True
+
+        await self._notify_and_leave_unauthorized_group(
+            chat,
+            "偵測到未授權群組的活動",
+        )
+        return False
+
+    async def _notify_and_leave_unauthorized_group(self, chat, reason: str) -> None:
+        chat_title = getattr(chat, "title", None) or "未命名群組"
+        await self._notify_owner(
+            f"{reason}：{chat_title}（chat_id: {chat.id}）。機器人已退出，"
+            "如需使用請由 owner 親自重新加入。"
+        )
+        try:
+            await self.application.bot.leave_chat(chat.id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to leave unauthorized chat %s: %s", chat.id, exc)
 
     async def _notify_owner(self, text: str, *, parse_mode: str | None = None) -> bool:
         owner_id = self.settings.owner_telegram_user_id
@@ -669,8 +776,12 @@ def build_application(settings: Settings) -> Application:
     )
     bot.application = application
 
+    application.add_handler(
+        ChatMemberHandler(bot.handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER)
+    )
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(CommandHandler("help", bot.start))
+    application.add_handler(CommandHandler("authorize_group", bot.authorize_group))
     application.add_handler(CommandHandler("status", bot.status))
     application.add_handler(CommandHandler("summary", bot.manual_summary))
     application.add_handler(CommandHandler("preview", bot.preview_summary))
