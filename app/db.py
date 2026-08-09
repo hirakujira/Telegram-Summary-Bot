@@ -96,6 +96,17 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_messages_chat_time
             ON messages(chat_id, created_at_utc);
+
+            CREATE TABLE IF NOT EXISTS subscriptions (
+              user_id INTEGER NOT NULL,
+              chat_id INTEGER NOT NULL,
+              created_at_utc TEXT NOT NULL,
+              PRIMARY KEY(user_id, chat_id),
+              FOREIGN KEY(chat_id) REFERENCES chat_settings(chat_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_chat
+            ON subscriptions(chat_id);
             """
         )
         # Indexes touching reply_to_message_id are created only after migration,
@@ -335,7 +346,52 @@ class Database:
             "UPDATE chat_settings SET authorized = 0, updated_at_utc = ? WHERE chat_id = ?",
             (to_iso(utc_now()), chat_id),
         )
+        await self.conn.execute("DELETE FROM subscriptions WHERE chat_id = ?", (chat_id,))
         await self.conn.commit()
+
+    async def get_authorized_chat_ids(self) -> list[int]:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "SELECT chat_id FROM chat_settings WHERE authorized = 1 ORDER BY chat_id ASC"
+        )
+        return [row["chat_id"] for row in await cursor.fetchall()]
+
+    async def add_subscription(self, user_id: int, chat_id: int) -> bool:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO subscriptions(user_id, chat_id, created_at_utc)
+            VALUES(?, ?, ?)
+            """,
+            (user_id, chat_id, to_iso(utc_now())),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def remove_subscription(self, user_id: int, chat_id: int) -> bool:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "DELETE FROM subscriptions WHERE user_id = ? AND chat_id = ?",
+            (user_id, chat_id),
+        )
+        await self.conn.commit()
+        return cursor.rowcount == 1
+
+    async def get_subscribed_chat_ids(self, user_id: int) -> list[int]:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "SELECT chat_id FROM subscriptions WHERE user_id = ? ORDER BY chat_id ASC",
+            (user_id,),
+        )
+        return [row["chat_id"] for row in await cursor.fetchall()]
+
+    async def get_subscriber_ids(self, chat_id: int) -> list[int]:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            "SELECT user_id FROM subscriptions WHERE chat_id = ? ORDER BY user_id ASC",
+            (chat_id,),
+        )
+        return [row["user_id"] for row in await cursor.fetchall()]
 
     async def get_last_summarized_at(self, chat_id: int) -> str | None:
         await self.ensure_chat(chat_id)

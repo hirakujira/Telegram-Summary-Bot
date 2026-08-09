@@ -9,6 +9,7 @@
 - 三種摘要風格：`normal` / `funny` / `roast`
 - 只允許指定擁有者調整排程與參數
 - 僅處理 owner 明確授權的群組，防止被加入未知群組後收集資料
+- 使用者可私訊訂閱自己所在群組的排程摘要
 - SQLite 儲存訊息與摘要進度
 - 預設使用 `gpt-5.6-luna`，統一透過 Responses API 產生摘要
 - 訊息量過少時自動延後摘要，避免產生空洞內容
@@ -66,8 +67,18 @@ docker compose up -d --build
 - `/set_style <normal|funny|roast>`: 設定摘要風格（擁有者限定）
 - `/set_auto <on|off>`: 開關自動摘要（擁有者限定）
 - `/authorize_group`: 授權目前群組（擁有者限定，用於既有群組）
+- `/subscribe`: 私訊 bot 後，從可存取的群組清單選擇要訂閱的排程摘要
+- `/unsubscribe`: 私訊 bot 後，選擇要取消的摘要訂閱
 
-## 5. 排程格式
+## 5. 私訊摘要訂閱
+
+使用者先私訊 bot 一次，再執行 `/subscribe`，bot 只會顯示該使用者目前仍在其中的已授權群組。
+
+為了可靠驗證其他使用者是否仍在群組，bot 必須是每個可訂閱群組的管理員。若 Telegram 無法確認成員資格，bot 會採取 fail-closed 策略：不顯示群組、不建立訂閱，也不寄送摘要。
+
+只有群組的排程自動摘要會同步私訊訂閱者；手動 `/summary` 與帶條件的臨時摘要不會通知。通知直接重用已產生的 Telegram HTML 摘要，不會產生額外的 OpenAI API 或 token 用量。每次寄送前都會再次檢查訂閱者仍是群組成員；已離開群組者會自動取消訂閱。
+
+## 6. 排程格式
 
 `/set_schedule` 使用標準 5 欄 cron：
 
@@ -86,7 +97,7 @@ docker compose up -d --build
 - `UTC+8`
 - `Asia/Taipei`
 
-## 6. 摘要風格
+## 7. 摘要風格
 
 用 `/set_style <normal|funny|roast>` 逐群組設定，預設 `normal`。
 
@@ -100,7 +111,7 @@ docker compose up -d --build
 
 `roast` 是群組自願開啟的娛樂模式，會直接開嗆並使用粗俗口語，只保留兩條底線：不能編造沒發生過的事，以及不針對種族、性別、性向、宗教或身心障礙等身分特徵攻擊（後者也會導致模型拒答，讓整份摘要失敗）。要調整尺度改 `app/llm.py` 的 `STYLE_PROMPTS["roast"]` 即可，不需動 `OUTPUT_CONTRACT`。
 
-## 7. OpenAI Responses API
+## 8. OpenAI Responses API
 
 所有摘要都使用 Responses API，不再提供 Chat Completions 或舊版 GPT-4 呼叫路徑。
 
@@ -108,7 +119,7 @@ docker compose up -d --build
 
 Reasoning 設定會傳成 Responses API 的 `reasoning.effort`。若模型或指定程度不支援，Bot 會移除 reasoning 設定並以模型預設值重試；`default` 則永遠不傳 reasoning 參數。
 
-## 8. 資料儲存
+## 9. 資料儲存
 
 SQLite 預設路徑：`/app/data/bot.db`（映射到本機 `./data/bot.db`）。
 
@@ -122,7 +133,7 @@ SQLite 預設路徑：`/app/data/bot.db`（映射到本機 `./data/bot.db`）。
 
 摘要中的「回到討論」支援公開群組與超級群組；Telegram 不提供一般私人群組的訊息永久連結。
 
-## 9. 訊息過少時的策略
+## 10. 訊息過少時的策略
 
 - 手動 `/summary`：只要有訊息就會摘要（不套用最低門檻）
 - 自動摘要：若訊息數 `< MIN_MESSAGES_TO_SUMMARY`，先不發佈，繼續累積
