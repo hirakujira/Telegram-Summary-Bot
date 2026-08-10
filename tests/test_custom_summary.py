@@ -58,8 +58,15 @@ class FakeBot:
     def __init__(self):
         self.sent: list[SimpleNamespace] = []
 
-    async def send_message(self, *, chat_id, text, parse_mode=None):
-        self.sent.append(SimpleNamespace(chat_id=chat_id, text=text, parse_mode=parse_mode))
+    async def send_message(self, *, chat_id, text, parse_mode=None, link_preview_options=None):
+        self.sent.append(
+            SimpleNamespace(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                link_preview_options=link_preview_options,
+            )
+        )
 
     async def get_chat(self, chat_id):
         return SimpleNamespace(title="測試群組", username=None)
@@ -178,7 +185,9 @@ class CustomSummaryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.summarizer.calls[0]["topic"], None)
         self.assertIsNotNone(await self.bot.db.get_last_summarized_at(GROUP_ID))
-        self.assertEqual(len([s for s in self.telegram_bot.sent if s.chat_id == GROUP_ID]), 1)
+        posted = [s for s in self.telegram_bot.sent if s.chat_id == GROUP_ID]
+        self.assertEqual(len(posted), 1)
+        self.assertTrue(posted[0].link_preview_options.is_disabled)
 
     async def test_empty_window_reports_topic_without_calling_model(self) -> None:
         await self._save_message(message_id=1, text="兩週前的無關閒聊", age=timedelta(days=15))

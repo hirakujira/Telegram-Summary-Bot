@@ -52,8 +52,15 @@ class FakeTelegramBot:
             SECOND_GROUP_ID: "第二群組",
         }
 
-    async def send_message(self, *, chat_id, text, parse_mode=None) -> None:
-        self.sent.append(SimpleNamespace(chat_id=chat_id, text=text, parse_mode=parse_mode))
+    async def send_message(self, *, chat_id, text, parse_mode=None, link_preview_options=None) -> None:
+        self.sent.append(
+            SimpleNamespace(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                link_preview_options=link_preview_options,
+            )
+        )
 
     async def get_chat(self, chat_id):
         return SimpleNamespace(title=self.titles[chat_id], username=None)
@@ -164,6 +171,36 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([[button.text for button in row] for row in buttons], [["測試群組"]])
         self.assertEqual(buttons[0][0].callback_data, f"subscribe:{GROUP_ID}")
 
+    async def test_subscribe_lists_current_subscriptions_when_no_other_group_is_available(self) -> None:
+        await self.bot.db.add_subscription(SUBSCRIBER_ID, GROUP_ID)
+        update, message = private_update(user_id=SUBSCRIBER_ID)
+
+        await self.bot.subscribe(update, None)
+
+        self.assertEqual(
+            message.replies[0].text,
+            "目前沒有其他可訂閱的群組摘要。\n\n你目前已訂閱：\n- 測試群組",
+        )
+        self.assertIsNone(message.replies[0].reply_markup)
+
+    async def test_subscribe_lists_current_subscriptions_alongside_available_groups(self) -> None:
+        await self.bot.db.add_subscription(SUBSCRIBER_ID, GROUP_ID)
+        await self.bot.db.authorize_chat(SECOND_GROUP_ID)
+        self.telegram_bot.members[(SECOND_GROUP_ID, SUBSCRIBER_ID)] = SimpleNamespace(
+            status="member",
+            is_member=True,
+        )
+        update, message = private_update(user_id=SUBSCRIBER_ID)
+
+        await self.bot.subscribe(update, None)
+
+        self.assertEqual(
+            message.replies[0].text,
+            "請選擇要訂閱排程摘要的群組：\n\n你目前已訂閱：\n- 測試群組",
+        )
+        buttons = message.replies[0].reply_markup.inline_keyboard
+        self.assertEqual([[button.text for button in row] for row in buttons], [["第二群組"]])
+
     async def test_subscribe_callback_rechecks_membership_before_creating_subscription(self) -> None:
         query = FakeCallbackQuery(user_id=SUBSCRIBER_ID, data=f"subscribe:{GROUP_ID}")
         update = SimpleNamespace(callback_query=query)
@@ -216,6 +253,8 @@ class SubscriptionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([message.chat_id for message in self.telegram_bot.sent], [GROUP_ID, SUBSCRIBER_ID])
         self.assertEqual(self.telegram_bot.sent[0].text, self.telegram_bot.sent[1].text)
         self.assertEqual(self.telegram_bot.sent[1].parse_mode, "HTML")
+        self.assertTrue(self.telegram_bot.sent[0].link_preview_options.is_disabled)
+        self.assertTrue(self.telegram_bot.sent[1].link_preview_options.is_disabled)
         self.assertEqual(
             await self.bot.db.get_subscribed_chat_ids(STALE_SUBSCRIBER_ID),
             [],

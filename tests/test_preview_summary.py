@@ -44,8 +44,15 @@ class FakeBot:
     def __init__(self):
         self.sent: list[SimpleNamespace] = []
 
-    async def send_message(self, *, chat_id, text, parse_mode=None):
-        self.sent.append(SimpleNamespace(chat_id=chat_id, text=text, parse_mode=parse_mode))
+    async def send_message(self, *, chat_id, text, parse_mode=None, link_preview_options=None):
+        self.sent.append(
+            SimpleNamespace(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=parse_mode,
+                link_preview_options=link_preview_options,
+            )
+        )
 
     async def get_chat(self, chat_id):
         return SimpleNamespace(title="測試群組", username=None)
@@ -121,6 +128,7 @@ class PreviewSummaryTests(unittest.IsolatedAsyncioTestCase):
 
         result = self.telegram_bot.sent[-1]
         self.assertEqual(result.parse_mode, "HTML")
+        self.assertTrue(result.link_preview_options.is_disabled)
         self.assertIn("🔍 <b>預覽（未發佈到群組）</b>", result.text)
         self.assertIn(f"測試群組 · chat_id {GROUP_ID}", result.text)
         self.assertIn("<blockquote expandable>", result.text)

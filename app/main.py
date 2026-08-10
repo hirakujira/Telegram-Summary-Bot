@@ -4,7 +4,13 @@ import logging
 from datetime import datetime, timedelta
 
 from croniter import CroniterBadCronError, croniter
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+    Update,
+)
 from telegram.constants import ChatType
 from telegram.ext import (
     Application,
@@ -135,12 +141,26 @@ class SummaryBot:
                 ]
             )
 
+        subscribed_summary = ""
+        if subscribed_chat_ids:
+            subscribed_titles = []
+            for chat_id in sorted(subscribed_chat_ids):
+                chat_title, _ = await self._resolve_chat_metadata(chat_id)
+                subscribed_titles.append(f"- {chat_title}")
+            subscribed_summary = "\n\n你目前已訂閱：\n" + "\n".join(subscribed_titles)
+
         if not buttons:
-            await message.reply_text("目前沒有你可訂閱的群組摘要。")
+            if not subscribed_chat_ids:
+                await message.reply_text("目前沒有你可訂閱的群組摘要。")
+                return
+
+            await message.reply_text(
+                "目前沒有其他可訂閱的群組摘要。" + subscribed_summary
+            )
             return
 
         await message.reply_text(
-            "請選擇要訂閱排程摘要的群組：",
+            "請選擇要訂閱排程摘要的群組：" + subscribed_summary,
             reply_markup=InlineKeyboardMarkup(buttons),
         )
 
@@ -550,6 +570,7 @@ class SummaryBot:
         await self._notify_owner(
             f"{build_preview_header(chat_title=chat_title, chat_id=chat.id, window_hours=window_hours)}\n\n{full_text}",
             parse_mode="HTML",
+            disable_link_preview=True,
         )
 
     async def scheduler_tick(self, _: ContextTypes.DEFAULT_TYPE) -> None:
@@ -713,6 +734,7 @@ class SummaryBot:
                 chat_id=chat_id,
                 text=full_text,
                 parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Send message failed for chat %s: %s", chat_id, exc)
@@ -769,14 +791,28 @@ class SummaryBot:
         except Exception as exc:  # noqa: BLE001
             logger.error("Failed to leave unauthorized chat %s: %s", chat.id, exc)
 
-    async def _notify_owner(self, text: str, *, parse_mode: str | None = None) -> bool:
+    async def _notify_owner(
+        self,
+        text: str,
+        *,
+        parse_mode: str | None = None,
+        disable_link_preview: bool = False,
+    ) -> bool:
         owner_id = self.settings.owner_telegram_user_id
         try:
-            await self.application.bot.send_message(
-                chat_id=owner_id,
-                text=text,
-                parse_mode=parse_mode,
-            )
+            if disable_link_preview:
+                await self.application.bot.send_message(
+                    chat_id=owner_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
+                )
+            else:
+                await self.application.bot.send_message(
+                    chat_id=owner_id,
+                    text=text,
+                    parse_mode=parse_mode,
+                )
             return True
         except Exception as exc:  # noqa: BLE001
             logger.error(
@@ -822,6 +858,7 @@ class SummaryBot:
                     chat_id=user_id,
                     text=full_text,
                     parse_mode="HTML",
+                    link_preview_options=LinkPreviewOptions(is_disabled=True),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
