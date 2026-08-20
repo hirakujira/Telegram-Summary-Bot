@@ -56,6 +56,14 @@ class Database:
         self.conn = await aiosqlite.connect(self.path)
         self.conn.row_factory = aiosqlite.Row
         await self.conn.execute("PRAGMA journal_mode = WAL")
+        await self._create_schema()
+        await self._migrate_messages_schema()
+        await self._create_indexes()
+        await self._migrate_chat_settings()
+        await self.conn.commit()
+
+    async def _create_schema(self) -> None:
+        assert self.conn is not None
         await self.conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS chat_settings (
@@ -94,9 +102,6 @@ class Database:
               PRIMARY KEY(chat_id, message_id)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_messages_chat_time
-            ON messages(chat_id, created_at_utc);
-
             CREATE TABLE IF NOT EXISTS subscriptions (
               user_id INTEGER NOT NULL,
               chat_id INTEGER NOT NULL,
@@ -104,14 +109,12 @@ class Database:
               PRIMARY KEY(user_id, chat_id),
               FOREIGN KEY(chat_id) REFERENCES chat_settings(chat_id) ON DELETE CASCADE
             );
-
-            CREATE INDEX IF NOT EXISTS idx_subscriptions_chat
-            ON subscriptions(chat_id);
             """
         )
-        # Indexes touching reply_to_message_id are created only after migration,
-        # because a legacy `messages` table does not have that column yet.
-        await self._migrate_messages_schema()
+
+    async def _create_indexes(self) -> None:
+        """Create indexes only after legacy message tables are migrated."""
+        assert self.conn is not None
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_chat_time "
             "ON messages(chat_id, created_at_utc)"
@@ -120,6 +123,13 @@ class Database:
             "CREATE INDEX IF NOT EXISTS idx_messages_reply "
             "ON messages(chat_id, reply_to_message_id)"
         )
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_subscriptions_chat "
+            "ON subscriptions(chat_id)"
+        )
+
+    async def _migrate_chat_settings(self) -> None:
+        assert self.conn is not None
         columns_cursor = await self.conn.execute("PRAGMA table_info(chat_settings)")
         columns = {row[1] for row in await columns_cursor.fetchall()}
         if "reasoning_effort" not in columns:
@@ -147,7 +157,6 @@ class Database:
             WHERE response_style NOT IN ('normal', 'funny', 'roast')
             """
         )
-        await self.conn.commit()
 
     async def _migrate_messages_schema(self) -> None:
         """Moves legacy per-message display names into the `users` table."""

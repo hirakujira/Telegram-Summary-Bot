@@ -1,84 +1,122 @@
-# Telegram 群組定期摘要機器人 (Python)
+# Telegram 群組定期摘要機器人
 
-這個機器人會在群組中持續收集文字訊息，並支援：
+這個 Bot 收集已授權 Telegram 群組中的文字訊息，依排程產生摘要。群組 owner 也可以手動摘要、預覽結果，或調整每個群組的設定。
 
-- 自動定期發佈群組摘要
-- 手動觸發摘要 (`/summary`)
-- 擁有者專屬預覽 (`/preview`)：結果只私訊擁有者，不發佈到群組、不影響排程進度
-- 排除機器人、貼圖、圖片、影音類型訊息
-- 三種摘要風格：`normal` / `funny` / `roast`
-- 只允許指定擁有者調整排程與參數
-- 僅處理 owner 明確授權的群組，防止被加入未知群組後收集資料
-- 使用者可私訊訂閱自己所在群組的排程摘要
-- SQLite 儲存訊息與摘要進度
-- 預設使用 `gpt-5.6-luna`，統一透過 Responses API 產生摘要
-- 訊息量過少時自動延後摘要，避免產生空洞內容
-- 每個摘要主題附上原始訊息連結，可直接回到相關討論點
+## 功能
 
-## 1. 準備設定
+- 依 cron 排程自動發佈群組摘要
+- 以 `/summary` 立即產生摘要，或指定時間範圍與主題
+- 以 `/preview` 私訊預覽，不發佈到群組、不改變摘要進度
+- 三種摘要風格：`normal`、`funny`、`roast`
+- 僅接受 owner 加入的群組，避免在未知群組收集資料
+- 使用者可私訊訂閱自己仍在其中的群組摘要
+- 每個摘要主題附上可用的原始訊息連結
+- SQLite 儲存訊息、群組設定與摘要進度
 
-複製環境變數範本：
+不會收集 Bot 訊息、貼圖、圖片、影片、語音、音訊、video note 或動畫。文字 caption 會被視為文字訊息。
+
+## 輸出範例
+
+![Telegram 群組摘要範例](example.jpg)
+
+## 快速啟動
+
+### 1. 準備 `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-編輯 `.env`：
+請以 `.env.example` 作為完整設定範本，複製後只需先填入下列必填值：
 
-- `TELEGRAM_BOT_TOKEN`: BotFather 建立 bot 後取得
-- `OPENAI_API_KEY`: OpenAI API 金鑰
-- `OWNER_TELEGRAM_USER_ID`: 你的 Telegram user id（只有這個 id 可改設定）
-- `DEFAULT_MODEL`: 新群組的預設模型（預設 `gpt-5.6-luna`）
-- `DEFAULT_REASONING_EFFORT`: 預設 reasoning 程度（預設 `default`，沿用模型預設）
-- `MIN_MESSAGES_TO_SUMMARY`: 自動摘要最低訊息門檻（預設 `8`）
-- `MAX_SUMMARY_GAP_HOURS`: 若未達門檻，最多累積幾小時後仍會強制摘要（預設 `24`）
-- `PREVIEW_WINDOW_HOURS`: `/preview` 回推的時間範圍（預設 `24`）
-- `OPENAI_MAX_OUTPUT_TOKENS`: 單次摘要請求的輸出 token 上限（預設 `1800`，可用來控管預算），使用 reasonable 模型的時候因為推理會佔用 token，所以需要設大一點
+- `TELEGRAM_BOT_TOKEN`
+- `OPENAI_API_KEY`
+- `OWNER_TELEGRAM_USER_ID`
 
-## 2. 啟動
+### 2. 啟動容器
 
 ```bash
 docker compose up -d --build
 ```
 
-## 3. BotFather 必做設定
+查看 log：
 
-為了讓 bot 能看到群組成員訊息內容：
+```bash
+docker compose logs -f telegram-summary-bot
+```
 
-1. 把 bot 加入目標群組
-2. 在 BotFather 對該 bot 執行 `/setprivacy`，選擇 `Disable`
+更新程式後重新建置：
 
-否則 bot 可能只會收到指令，無法做完整摘要。
+```bash
+docker compose up -d --build
+```
 
-安全性限制：請由 `OWNER_TELEGRAM_USER_ID` 對應的帳號親自將 bot 加入群組。若由其他帳號加入，bot 會私訊通知 owner 並立刻退出，不會收集群組訊息。
+資料庫保存在本機 `./data/bot.db`，Docker volume 會將它映射到容器內的 `/app/data/bot.db`。
 
-升級至這個版本後，既有群組會暫停授權但保留資料。請由 owner 在要繼續使用的群組內執行 `/authorize_group`，或由 owner 將 bot 移除後重新加入。
+## Telegram 與 BotFather 設定
 
-## 4. 指令
+1. 在 BotFather 建立 Bot，取得 `TELEGRAM_BOT_TOKEN`。
+2. 在 BotFather 對 Bot 執行 `/setprivacy`，選擇 `Disable`。否則 Bot 通常只能收到指令，無法取得完整群組訊息。
+3. 使用 `OWNER_TELEGRAM_USER_ID` 對應的帳號將 Bot 加入群組。
+4. 將 Bot 設為群組管理員。Telegram 只有在 Bot 是管理員時，才會傳送 owner 與其他成員的狀態變更。
+5. 若 owner 沒有親自加入 Bot，Bot 會私訊通知 owner 後離開群組，不會保存群組訊息。
+6. owner 離開群組時，Bot 會撤銷授權後自行離開；owner 重新加入群組後，需重新加入 Bot。
+7. owner 和要訂閱的使用者都需要先私訊 Bot 一次，Telegram 才允許 Bot 主動傳送私訊。
 
-- `/start` 或 `/help`: 顯示說明
-- `/summary`: 立即產生一次摘要（擁有者限定）
-- `/preview`: 在群組內輸入，預覽過去 `PREVIEW_WINDOW_HOURS` 小時的摘要，結果只私訊擁有者（擁有者限定）
-- `/status`: 查看當前群組設定
-- `/set_schedule <cron>`: 設定 cron 排程（擁有者限定）
-- `/set_timezone <tz>`: 設定時區（擁有者限定）
-- `/set_model <model>`: 設定模型（擁有者限定）
-- `/set_reasoning <default|none|minimal|low|medium|high|xhigh|max>`: 設定 reasoning 程度（擁有者限定）
-- `/set_style <normal|funny|roast>`: 設定摘要風格（擁有者限定）
-- `/set_auto <on|off>`: 開關自動摘要（擁有者限定）
-- `/authorize_group`: 授權目前群組（擁有者限定，用於既有群組）
-- `/subscribe`: 私訊 bot 後，從可存取的群組清單選擇要訂閱的排程摘要
-- `/unsubscribe`: 私訊 bot 後，選擇要取消的摘要訂閱
+## 設定
 
-## 5. 私訊摘要訂閱
+所有設定都放在 `.env`，欄位名稱與預設值以 `.env.example` 為準。前 3 個欄位必填，其餘都有預設值。
 
-使用者先私訊 bot 一次，再執行 `/subscribe`，bot 只會顯示該使用者目前仍在其中的已授權群組。
+| 環境變數 | 預設值 | 說明 |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | 無 | BotFather 建立 Bot 後取得的 token |
+| `OPENAI_API_KEY` | 無 | OpenAI API key |
+| `OWNER_TELEGRAM_USER_ID` | 無 | 唯一可管理群組設定的 Telegram user id |
+| `DEFAULT_TIMEZONE` | `UTC+8` | 新群組預設時區，例如 `UTC+8`、`Asia/Taipei` |
+| `DEFAULT_CRON_EXPR` | `0 9 * * *` | 新群組預設排程，使用 5 欄 cron |
+| `DEFAULT_MODEL` | `gpt-5.6-luna` | 新群組預設 OpenAI Responses API 模型 |
+| `DEFAULT_REASONING_EFFORT` | `default` | 預設 reasoning 程度，可用 `default`、`none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` |
+| `SQLITE_PATH` | `/app/data/bot.db` | SQLite 資料庫路徑。使用 Docker 時若改動此值，也要調整 volume |
+| `MAX_MESSAGES_PER_SUMMARY` | `10000` | 單次送給模型的最新訊息上限。超過時仍會顯示完整訊息總數 |
+| `MIN_MESSAGES_TO_SUMMARY` | `8` | 自動摘要的最低訊息數 |
+| `MAX_SUMMARY_GAP_HOURS` | `24` | 未達最低訊息數時，最久累積多久仍強制產生一次自動摘要 |
+| `MESSAGE_RETENTION_DAYS` | `180` | 原始訊息保存天數，也限制帶時間範圍的手動摘要可查詢範圍 |
+| `OPENAI_MAX_OUTPUT_TOKENS` | `25000` | 每次摘要與條件解析的輸出 token 上限。使用 reasoning 模型時通常需要較高值 |
 
-為了可靠驗證其他使用者是否仍在群組，bot 必須是每個可訂閱群組的管理員。若 Telegram 無法確認成員資格，bot 會採取 fail-closed 策略：不顯示群組、不建立訂閱，也不寄送摘要。
+`default` 不會傳送 reasoning 參數。若模型不支援指定的 reasoning 程度，Bot 會以模型預設值重試。
 
-只有群組的排程自動摘要會同步私訊訂閱者；手動 `/summary` 與帶條件的臨時摘要不會通知。通知直接重用已產生的 Telegram HTML 摘要，不會產生額外的 OpenAI API 或 token 用量。每次寄送前都會再次檢查訂閱者仍是群組成員；已離開群組者會自動取消訂閱。
+## 指令
 
-## 6. 排程格式
+### 僅擁有者
+
+| 指令 | 說明 |
+| --- | --- |
+| `/start`、`/help` | 顯示指令說明 |
+| `/summary` | 立即整理上次摘要後的訊息 |
+| `/summary <條件>` | 依自然語言指定時間或主題，例如 `/summary 這兩週以來討論到露營的事情` |
+| `/preview` | 私訊預覽最近 24 小時的摘要 |
+| `/status` | 顯示目前群組設定與摘要進度 |
+| `/set_schedule <cron>` | 設定群組排程 |
+| `/set_timezone <tz>` | 設定時區，例如 `UTC+8`、`Asia/Taipei` |
+| `/set_model <model>` | 設定摘要模型 |
+| `/set_reasoning <level>` | 設定 reasoning 程度 |
+| `/set_style <normal\|funny\|roast>` | 設定摘要風格 |
+| `/set_auto <on\|off>` | 開啟或關閉自動摘要 |
+
+`/summary` 與 `/preview` 都必須在已授權群組中執行。手動摘要只要有文字訊息就會執行，不受 `MIN_MESSAGES_TO_SUMMARY` 限制。
+
+### 一般用戶
+
+| 指令 | 使用位置 | 說明 |
+| --- | --- | --- |
+| `/subscribe` | 私訊 Bot | 選擇要訂閱的已授權群組 |
+| `/unsubscribe` | 私訊 Bot | 取消群組摘要訂閱 |
+
+訂閱清單只會顯示 Bot 能確認使用者仍在其中的群組。因此 Bot 必須是可訂閱群組的管理員，才能可靠呼叫 Telegram 的成員查詢 API。無法確認時，Bot 不會顯示群組、不會建立訂閱。
+
+只有**排程自動摘要**會私訊訂閱者。手動 `/summary`、帶條件的 `/summary <條件>` 與 `/preview` 不會通知訂閱者。Bot 會重用已產生的 HTML 摘要，不會增加 OpenAI API 呼叫；寄送前也會再次確認訂閱者仍是群組成員，離群者會自動取消訂閱。
+
+## 排程與時區
 
 `/set_schedule` 使用標準 5 欄 cron：
 
@@ -88,53 +126,53 @@ docker compose up -d --build
 
 例如：
 
-- `0 9 * * *` 每天 09:00
-- `0 */6 * * *` 每 6 小時
-- `30 9 * * 1` 每週一 09:30
+| cron | 執行時間 |
+| --- | --- |
+| `0 9 * * *` | 每天 09:00 |
+| `0 */6 * * *` | 每 6 小時 |
+| `30 9 * * 1` | 每週一 09:30 |
 
-時區可設：
+排程會依群組時區計算。`/status` 顯示的下一次執行時間是 UTC。
 
-- `UTC+8`
-- `Asia/Taipei`
+自動摘要若訊息數少於 `MIN_MESSAGES_TO_SUMMARY`，會繼續累積，不會更新摘要進度。當最早一則未摘要訊息的累積時間達到 `MAX_SUMMARY_GAP_HOURS`，仍會產生摘要，避免群組長時間沒有更新。
 
-## 7. 摘要風格
+## 摘要風格
 
-用 `/set_style <normal|funny|roast>` 逐群組設定，預設 `normal`。
+| 風格 | 語氣與取材 |
+| --- | --- |
+| `normal` | 中性、精簡，優先保留決策、結論、重要事實、待辦事項與分歧 |
+| `funny` | 輕快有梗，但不犧牲重點，也不取笑個人 |
+| `roast` | 台式垃圾話與吐槽，群組自願開啟的娛樂模式 |
 
-| 風格 | 語氣 | 取材 |
-| --- | --- | --- |
-| `normal` | 中性、精簡、好讀 | 依資訊價值排序，省略寒暄與閒聊 |
-| `funny` | 活潑有梗 | 重點仍完整，笑點不取笑個人 |
-| `roast` | 台式垃圾話、毒舌開嗆 | 娛樂優先，只涵蓋最關鍵幾件事，閒聊與跳針就是素材 |
+三種風格都遵守同一份輸出契約：只根據對話內容、不杜撰事實、保留重要數字與專有名詞、清楚區分發言者，並且只使用對話紀錄中提供的 Telegram 討論連結。
 
-風格只決定 persona、語氣與取材取向。輸出格式、「回到討論」連結白名單、不杜撰事實與 prompt injection 防護是三種風格共用的硬契約（`app/llm.py` 的 `OUTPUT_CONTRACT`），風格不能覆寫。
+`roast` 可以嘲諷對話中真實發生的行為，但不能針對種族、性別、性向、宗教或身心障礙等身分特徵攻擊。
 
-`roast` 是群組自願開啟的娛樂模式，會直接開嗆並使用粗俗口語，只保留兩條底線：不能編造沒發生過的事，以及不針對種族、性別、性向、宗教或身心障礙等身分特徵攻擊（後者也會導致模型拒答，讓整份摘要失敗）。要調整尺度改 `app/llm.py` 的 `STYLE_PROMPTS["roast"]` 即可，不需動 `OUTPUT_CONTRACT`。
+## 資料保存與升級
 
-## 8. OpenAI Responses API
+- Bot 預設保留最近 180 天的原始訊息供摘要使用，可用 `MESSAGE_RETENTION_DAYS` 調整。
+- `messages` 只保存 `user_id`，顯示名稱存於 `users` table。使用者改名後，歷史訊息會顯示最新名稱。
+- 回覆關係會被保存，讓模型能辨識同時進行的不同討論串。
+- 公開群組和超級群組可產生「回到討論」連結；一般私人群組沒有 Telegram 永久訊息連結。
 
-所有摘要都使用 Responses API，不再提供 Chat Completions 或舊版 GPT-4 呼叫路徑。
+舊版資料庫會在啟動時自動 migration。舊的 `messages.user_name` 會移至 `users` table，所有訊息會被保留；舊訊息沒有回覆關係，之後新收集的訊息才會開始保存。
 
-`OPENAI_MAX_OUTPUT_TOKENS` 會套用為 Responses API 的 `max_output_tokens`。
+群組只能由 owner 將 Bot 加入時自動授權。owner 或 Bot 離開群組時，Bot 會撤銷授權；請由 owner 重新加入 Bot。
 
-Reasoning 設定會傳成 Responses API 的 `reasoning.effort`。若模型或指定程度不支援，Bot 會移除 reasoning 設定並以模型預設值重試；`default` 則永遠不傳 reasoning 參數。
+## 常見問題
 
-## 9. 資料儲存
+### Bot 看不到群組訊息
 
-SQLite 預設路徑：`/app/data/bot.db`（映射到本機 `./data/bot.db`）。
+確認已在 BotFather 對 Bot 執行 `/setprivacy` 並選擇 `Disable`。也確認 Bot 是由 owner 加入群組。
 
-機器人會保留近 180 天原始訊息供摘要使用。
+### Bot 無法私訊預覽或訂閱摘要
 
-顯示名稱存在 `users` table（`user_id` 為主鍵），`messages` 只存 `user_id`，因此成員改名後所有歷史訊息都會顯示新名字，不保留舊名字。
+先由 owner 或訂閱者私訊 Bot 並輸入 `/start`。Telegram 不允許 Bot 主動開啟從未互動過的私訊。
 
-`messages.reply_to_message_id` 記錄該則訊息回覆的目標，讓摘要能分辨群組中同時進行的多個話題；被回覆的訊息不在本次摘要範圍或未被收集時，仍會保留該關聯。
+### 訂閱清單是空的
 
-舊版資料庫（`messages` 內含 `user_name`）會在啟動時自動 migration：訊息內容與筆數完整保留，每位成員取最近一次出現的名稱，既有訊息的回覆欄位為空，之後才開始累積。
+使用者必須仍在已授權群組中，且 Bot 必須有管理員權限以查詢成員資格。
 
-摘要中的「回到討論」支援公開群組與超級群組；Telegram 不提供一般私人群組的訊息永久連結。
+## License
 
-## 10. 訊息過少時的策略
-
-- 手動 `/summary`：只要有訊息就會摘要（不套用最低門檻）
-- 自動摘要：若訊息數 `< MIN_MESSAGES_TO_SUMMARY`，先不發佈，繼續累積
-- 但若最早一則「尚未被摘要的訊息」已累積超過 `MAX_SUMMARY_GAP_HOURS`，仍會發佈摘要，避免長時間沒更新
+This project is licensed under the [MIT License](LICENSE).

@@ -10,10 +10,8 @@ from croniter import croniter
 OFFSET_RE = re.compile(r"^UTC([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
 
 
-
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
-
 
 
 def parse_timezone(tz_text: str):
@@ -30,14 +28,12 @@ def parse_timezone(tz_text: str):
     return ZoneInfo(tz_text)
 
 
-
 def compute_next_run_utc(cron_expr: str, tz_text: str, base_utc: datetime | None = None) -> datetime:
     current_utc = base_utc or utc_now()
     tz = parse_timezone(tz_text)
     current_local = current_utc.astimezone(tz)
     next_local = croniter(cron_expr, current_local).get_next(datetime)
     return next_local.astimezone(timezone.utc)
-
 
 
 def to_iso(dt: datetime) -> str:

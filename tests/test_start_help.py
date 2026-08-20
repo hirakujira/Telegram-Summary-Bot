@@ -47,9 +47,13 @@ class StartHelpTests(unittest.IsolatedAsyncioTestCase):
 
         await self.bot.start(update, None)
 
+        self.assertIn("僅擁有者：", message.replies[0])
+        self.assertIn("一般用戶（請私訊機器人）：", message.replies[0])
         self.assertIn("/summary - 立即產生摘要", message.replies[0])
         self.assertIn("/set_schedule <cron>", message.replies[0])
         self.assertIn("/subscribe", message.replies[0])
+        self.assertNotIn("(僅擁有者)", message.replies[0])
+        self.assertNotIn("/authorize_group", message.replies[0])
 
     async def test_non_owner_only_sees_subscription_commands(self) -> None:
         update, message = build_update(user_id=OWNER_ID + 1)
@@ -58,6 +62,7 @@ class StartHelpTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("/subscribe", message.replies[0])
         self.assertIn("/unsubscribe", message.replies[0])
+        self.assertNotIn("僅擁有者：", message.replies[0])
         self.assertNotIn("/summary", message.replies[0])
         self.assertNotIn("/set_schedule", message.replies[0])
         self.assertNotIn("/status", message.replies[0])

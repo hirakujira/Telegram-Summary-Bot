@@ -28,14 +28,6 @@ class FakeTelegramBot:
         self.left_chats.append(chat_id)
 
 
-class FakeMessage:
-    def __init__(self) -> None:
-        self.replies: list[str] = []
-
-    async def reply_text(self, text: str) -> None:
-        self.replies.append(text)
-
-
 def build_membership_update(*, actor_id: int, old_status: str, new_status: str):
     return SimpleNamespace(
         my_chat_member=SimpleNamespace(
@@ -47,6 +39,32 @@ def build_membership_update(*, actor_id: int, old_status: str, new_status: str):
             from_user=SimpleNamespace(id=actor_id),
             old_chat_member=SimpleNamespace(status=old_status),
             new_chat_member=SimpleNamespace(status=new_status),
+        )
+    )
+
+
+def build_owner_membership_update(
+    *,
+    old_status: str,
+    new_status: str,
+    is_member: bool | None = None,
+):
+    return SimpleNamespace(
+        chat_member=SimpleNamespace(
+            chat=SimpleNamespace(
+                id=GROUP_ID,
+                type=ChatType.SUPERGROUP,
+                title="測試群組",
+            ),
+            old_chat_member=SimpleNamespace(
+                status=old_status,
+                user=SimpleNamespace(id=OWNER_ID),
+            ),
+            new_chat_member=SimpleNamespace(
+                status=new_status,
+                user=SimpleNamespace(id=OWNER_ID),
+                is_member=is_member,
+            ),
         )
     )
 
@@ -82,23 +100,6 @@ class GroupAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.bot.db.is_chat_authorized(GROUP_ID))
         self.assertEqual(self.telegram_bot.left_chats, [])
 
-    async def test_owner_can_authorize_an_existing_group_by_command(self) -> None:
-        message = FakeMessage()
-        update = SimpleNamespace(
-            effective_user=SimpleNamespace(id=OWNER_ID),
-            effective_message=message,
-            effective_chat=SimpleNamespace(
-                id=GROUP_ID,
-                type=ChatType.SUPERGROUP,
-                title="測試群組",
-            ),
-        )
-
-        await self.bot.authorize_group(update, None)
-
-        self.assertTrue(await self.bot.db.is_chat_authorized(GROUP_ID))
-        self.assertEqual(message.replies, ["此群組已授權，機器人會開始收集訊息與執行摘要排程。"])
-
     async def test_non_owner_adding_bot_notifies_owner_and_leaves(self) -> None:
         await self.bot.handle_my_chat_member(
             build_membership_update(
@@ -127,6 +128,36 @@ class GroupAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertFalse(await self.bot.db.is_chat_authorized(GROUP_ID))
+
+    async def test_owner_leaving_revokes_authorization_and_makes_bot_leave(self) -> None:
+        await self.bot.db.authorize_chat(GROUP_ID)
+        await self.bot.db.add_subscription(user_id=101, chat_id=GROUP_ID)
+
+        await self.bot.handle_owner_chat_member(
+            build_owner_membership_update(old_status="member", new_status="left"),
+            None,
+        )
+
+        self.assertFalse(await self.bot.db.is_chat_authorized(GROUP_ID))
+        self.assertEqual(await self.bot.db.get_subscriber_ids(GROUP_ID), [])
+        self.assertEqual(self.telegram_bot.left_chats, [GROUP_ID])
+        self.assertEqual([message.chat_id for message in self.telegram_bot.sent], [OWNER_ID])
+        self.assertIn("owner 已離開群組", self.telegram_bot.sent[0].text)
+
+    async def test_restricted_owner_still_in_group_keeps_authorization(self) -> None:
+        await self.bot.db.authorize_chat(GROUP_ID)
+
+        await self.bot.handle_owner_chat_member(
+            build_owner_membership_update(
+                old_status="member",
+                new_status="restricted",
+                is_member=True,
+            ),
+            None,
+        )
+
+        self.assertTrue(await self.bot.db.is_chat_authorized(GROUP_ID))
+        self.assertEqual(self.telegram_bot.left_chats, [])
 
     async def test_unauthorized_group_activity_leaves_without_storing_message(self) -> None:
         message = SimpleNamespace(

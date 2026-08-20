@@ -16,12 +16,12 @@ class Settings:
     default_model: str = "gpt-5.6-luna"
     default_reasoning_effort: str = "default"
     sqlite_path: str = "/app/data/bot.db"
-    max_messages_per_summary: int = 300
+    max_messages_per_summary: int = 10000
     min_messages_to_summary: int = 8
     max_summary_gap_hours: int = 24
+    message_retention_days: int = 180
     preview_window_hours: int = 24
-    openai_max_output_tokens: int = 1800
-
+    openai_max_output_tokens: int = 25000
 
 
 def _require_env(name: str) -> str:
@@ -29,7 +29,6 @@ def _require_env(name: str) -> str:
     if not value:
         raise ValueError(f"Missing required env var: {name}")
     return value
-
 
 
 def load_settings() -> Settings:
@@ -44,9 +43,10 @@ def load_settings() -> Settings:
             os.getenv("DEFAULT_REASONING_EFFORT", "default")
         ),
         sqlite_path=os.getenv("SQLITE_PATH", "/app/data/bot.db"),
-        max_messages_per_summary=int(os.getenv("MAX_MESSAGES_PER_SUMMARY", "300")),
+        max_messages_per_summary=int(os.getenv("MAX_MESSAGES_PER_SUMMARY", "10000")),
         min_messages_to_summary=int(os.getenv("MIN_MESSAGES_TO_SUMMARY", "8")),
         max_summary_gap_hours=int(os.getenv("MAX_SUMMARY_GAP_HOURS", "24")),
+        message_retention_days=int(os.getenv("MESSAGE_RETENTION_DAYS", "180")),
         preview_window_hours=int(os.getenv("PREVIEW_WINDOW_HOURS", "24")),
-        openai_max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "1800")),
+        openai_max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "25000")),
     )

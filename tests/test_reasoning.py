@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from app.config import Settings
+from app.config import Settings, load_settings
 from app.reasoning import (
     call_with_reasoning_fallback,
     is_reasoning_unsupported_error,
@@ -26,6 +27,26 @@ class ReasoningTests(unittest.TestCase):
     def test_default_model_is_gpt_5_6_luna(self) -> None:
         settings = Settings("telegram-token", "openai-key", 123)
         self.assertEqual(settings.default_model, "gpt-5.6-luna")
+
+    def test_runtime_defaults_match_environment_example(self) -> None:
+        settings = Settings("telegram-token", "openai-key", 123)
+
+        self.assertEqual(settings.max_messages_per_summary, 10000)
+        self.assertEqual(settings.openai_max_output_tokens, 25000)
+
+    def test_loads_configured_message_retention_days(self) -> None:
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "telegram-token",
+            "OPENAI_API_KEY": "openai-key",
+            "OWNER_TELEGRAM_USER_ID": "123",
+            "MESSAGE_RETENTION_DAYS": "90",
+        }
+        with patch.dict("os.environ", environment, clear=True):
+            settings = load_settings()
+
+        self.assertEqual(settings.message_retention_days, 90)
+        self.assertEqual(settings.max_messages_per_summary, 10000)
+        self.assertEqual(settings.openai_max_output_tokens, 25000)
 
     def test_rejects_unknown_reasoning_effort(self) -> None:
         with self.assertRaises(ValueError):
