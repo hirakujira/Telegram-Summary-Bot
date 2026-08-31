@@ -33,6 +33,7 @@ class ReasoningTests(unittest.TestCase):
 
         self.assertEqual(settings.max_messages_per_summary, 10000)
         self.assertEqual(settings.openai_max_output_tokens, 25000)
+        self.assertEqual(settings.daily_user_summary_limit, 0)
 
     def test_loads_configured_message_retention_days(self) -> None:
         environment = {
@@ -47,6 +48,20 @@ class ReasoningTests(unittest.TestCase):
         self.assertEqual(settings.message_retention_days, 90)
         self.assertEqual(settings.max_messages_per_summary, 10000)
         self.assertEqual(settings.openai_max_output_tokens, 25000)
+
+    def test_rejects_negative_daily_user_summary_limit(self) -> None:
+        environment = {
+            "TELEGRAM_BOT_TOKEN": "telegram-token",
+            "OPENAI_API_KEY": "openai-key",
+            "OWNER_TELEGRAM_USER_ID": "123",
+            "DAILY_USER_SUMMARY_LIMIT": "-1",
+        }
+        with patch.dict("os.environ", environment, clear=True):
+            with self.assertRaisesRegex(
+                ValueError,
+                "DAILY_USER_SUMMARY_LIMIT must be zero or a positive integer",
+            ):
+                load_settings()
 
     def test_rejects_unknown_reasoning_effort(self) -> None:
         with self.assertRaises(ValueError):

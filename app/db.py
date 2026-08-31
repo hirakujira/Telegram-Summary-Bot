@@ -36,6 +36,15 @@ class ChatSettings:
     next_run_at_utc: str
 
 
+@dataclass(slots=True)
+class UserSummaryHistory:
+    user_id: int
+    chat_id: int
+    prompt: str
+    created_at_utc: str
+    status: str
+
+
 class Database:
     def __init__(
         self,
@@ -109,6 +118,16 @@ class Database:
               PRIMARY KEY(user_id, chat_id),
               FOREIGN KEY(chat_id) REFERENCES chat_settings(chat_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS user_summary_requests (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              chat_id INTEGER NOT NULL,
+              prompt TEXT NOT NULL,
+              day_key TEXT NOT NULL,
+              created_at_utc TEXT NOT NULL,
+              status TEXT NOT NULL CHECK(status IN ('pending', 'succeeded', 'failed'))
+            );
             """
         )
 
@@ -126,6 +145,14 @@ class Database:
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_subscriptions_chat "
             "ON subscriptions(chat_id)"
+        )
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_summary_quota "
+            "ON user_summary_requests(user_id, chat_id, day_key, status)"
+        )
+        await self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_summary_created "
+            "ON user_summary_requests(created_at_utc)"
         )
 
     async def _migrate_chat_settings(self) -> None:
@@ -547,6 +574,101 @@ class Database:
         assert self.conn is not None
         await self.conn.execute(
             "DELETE FROM messages WHERE created_at_utc < ?",
+            (older_than_utc_iso,),
+        )
+        await self.conn.commit()
+
+    async def reserve_user_summary(
+        self,
+        *,
+        user_id: int,
+        chat_id: int,
+        prompt: str,
+        day_key: str,
+        created_at_utc: str,
+        limit: int | None,
+    ) -> int | None:
+        """Atomically create a pending request when the per-day quota permits it."""
+        assert self.conn is not None
+        if limit is None:
+            cursor = await self.conn.execute(
+                """
+                INSERT INTO user_summary_requests(
+                  user_id, chat_id, prompt, day_key, created_at_utc, status
+                ) VALUES(?, ?, ?, ?, ?, 'pending')
+                """,
+                (user_id, chat_id, prompt[:500], day_key, created_at_utc),
+            )
+        else:
+            cursor = await self.conn.execute(
+                """
+                INSERT INTO user_summary_requests(
+                  user_id, chat_id, prompt, day_key, created_at_utc, status
+                )
+                SELECT ?, ?, ?, ?, ?, 'pending'
+                WHERE (
+                  SELECT COUNT(*)
+                  FROM user_summary_requests
+                  WHERE user_id = ? AND chat_id = ? AND day_key = ?
+                    AND status IN ('pending', 'succeeded')
+                ) < ?
+                """,
+                (
+                    user_id,
+                    chat_id,
+                    prompt[:500],
+                    day_key,
+                    created_at_utc,
+                    user_id,
+                    chat_id,
+                    day_key,
+                    limit,
+                ),
+            )
+        await self.conn.commit()
+        return cursor.lastrowid if cursor.rowcount == 1 else None
+
+    async def record_failed_user_summary(
+        self, *, user_id: int, chat_id: int, prompt: str, day_key: str, created_at_utc: str
+    ) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            """
+            INSERT INTO user_summary_requests(
+              user_id, chat_id, prompt, day_key, created_at_utc, status
+            ) VALUES(?, ?, ?, ?, ?, 'failed')
+            """,
+            (user_id, chat_id, prompt[:500], day_key, created_at_utc),
+        )
+        await self.conn.commit()
+
+    async def set_user_summary_status(self, request_id: int, status: str) -> None:
+        assert status in {"succeeded", "failed"}
+        assert self.conn is not None
+        await self.conn.execute(
+            "UPDATE user_summary_requests SET status = ? WHERE id = ?",
+            (status, request_id),
+        )
+        await self.conn.commit()
+
+    async def get_user_summary_history(
+        self, *, excluded_user_id: int, limit: int = 20
+    ) -> list[UserSummaryHistory]:
+        assert self.conn is not None
+        cursor = await self.conn.execute(
+            """
+            SELECT user_id, chat_id, prompt, created_at_utc, status
+            FROM user_summary_requests WHERE user_id <> ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (excluded_user_id, limit),
+        )
+        return [UserSummaryHistory(**dict(row)) for row in await cursor.fetchall()]
+
+    async def purge_old_user_summary_requests(self, older_than_utc_iso: str) -> None:
+        assert self.conn is not None
+        await self.conn.execute(
+            "DELETE FROM user_summary_requests WHERE created_at_utc < ?",
             (older_than_utc_iso,),
         )
         await self.conn.commit()

@@ -22,6 +22,7 @@ class Settings:
     message_retention_days: int = 180
     preview_window_hours: int = 24
     openai_max_output_tokens: int = 25000
+    daily_user_summary_limit: int = 0
 
 
 def _require_env(name: str) -> str:
@@ -32,6 +33,10 @@ def _require_env(name: str) -> str:
 
 
 def load_settings() -> Settings:
+    daily_user_summary_limit = int(os.getenv("DAILY_USER_SUMMARY_LIMIT", "0"))
+    if daily_user_summary_limit < 0:
+        raise ValueError("DAILY_USER_SUMMARY_LIMIT must be zero or a positive integer")
+
     return Settings(
         telegram_bot_token=_require_env("TELEGRAM_BOT_TOKEN"),
         openai_api_key=_require_env("OPENAI_API_KEY"),
@@ -49,4 +54,5 @@ def load_settings() -> Settings:
         message_retention_days=int(os.getenv("MESSAGE_RETENTION_DAYS", "180")),
         preview_window_hours=int(os.getenv("PREVIEW_WINDOW_HOURS", "24")),
         openai_max_output_tokens=int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "25000")),
+        daily_user_summary_limit=daily_user_summary_limit,
     )

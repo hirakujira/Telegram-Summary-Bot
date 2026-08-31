@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
+from secrets import token_urlsafe
 
-from telegram import Message, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ChatType
+from telegram.error import TimedOut
 from telegram.ext import ContextTypes
 
 from app.bot.base import logger
@@ -14,11 +17,23 @@ from app.summary_format import (
     format_summary_for_telegram,
 )
 from app.summary_query import SummaryQueryError, resolve_query
-from app.time_utils import compute_next_run_utc, to_iso, utc_now
+from app.time_utils import compute_next_run_utc, parse_timezone, to_iso, utc_now
+
+
+@dataclass(slots=True)
+class UserSummaryRequest:
+    token: str
+    user_id: int
+    prompt: str
+    expires_at: datetime
 
 
 class SummaryMixin:
     async def manual_summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat = update.effective_chat
+        if chat and chat.type == ChatType.PRIVATE:
+            await self.user_summary(update, context)
+            return
         if not await self._assert_owner(update) or not await self._assert_authorized_group(update):
             return
 
@@ -88,6 +103,219 @@ class SummaryMixin:
                 await message.reply_text(f"在這個範圍內找不到與「{query.topic}」相關的訊息。")
             else:
                 await message.reply_text("在這個範圍內找不到可摘要的文字訊息。")
+
+    async def user_summary(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+        prompt = " ".join(context.args).strip() if context.args else ""
+        if not prompt:
+            await message.reply_text("請輸入條件，例如 /summary 最近三天關於出遊的討論。")
+            return
+        if len(prompt) > 500:
+            await message.reply_text("條件最多 500 個字。")
+            return
+        if (
+            user.id != self.settings.owner_telegram_user_id
+            and self.settings.daily_user_summary_limit == 0
+        ):
+            await message.reply_text("一般使用者私訊摘要目前未啟用。")
+            return
+
+        token = token_urlsafe(12)
+        self.user_summary_requests[user.id] = UserSummaryRequest(
+            token=token,
+            user_id=user.id,
+            prompt=prompt,
+            expires_at=utc_now() + timedelta(minutes=10),
+        )
+        buttons: list[list[InlineKeyboardButton]] = []
+        for chat_id in await self.db.get_authorized_chat_ids():
+            if not await self._check_active_membership(chat_id, user.id):
+                continue
+            title, _ = await self._resolve_chat_metadata(chat_id)
+            buttons.append(
+                [InlineKeyboardButton(title, callback_data=f"user_summary:{token}:{chat_id}")]
+            )
+        if not buttons:
+            self.user_summary_requests.pop(user.id, None)
+            await message.reply_text("目前沒有可確認你仍是成員的已授權群組可供摘要。")
+            return
+        await message.reply_text(
+            "請選擇要摘要的群組（10 分鐘內有效）：",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+    async def handle_user_summary_callback(
+        self, update: Update, _: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        callback = update.callback_query
+        if not callback or not callback.from_user:
+            return
+        await callback.answer()
+        if not callback.message or callback.message.chat.type != ChatType.PRIVATE:
+            await callback.edit_message_text("請私訊機器人使用摘要功能。")
+            return
+        try:
+            _, token, raw_chat_id = (callback.data or "").split(":", 2)
+        except ValueError:
+            await callback.edit_message_text("這個摘要請求無效，請重新輸入 /summary。")
+            return
+        request = self.user_summary_requests.get(callback.from_user.id)
+        if (
+            not request
+            or request.token != token
+            or request.expires_at < utc_now()
+        ):
+            await callback.edit_message_text("這個摘要請求已失效，請重新輸入 /summary。")
+            return
+        # Consume the one-time request before any await so double taps cannot
+        # start concurrent summaries (including for the unlimited owner).
+        self.user_summary_requests.pop(callback.from_user.id, None)
+        try:
+            chat_id = int(raw_chat_id)
+        except ValueError:
+            await callback.edit_message_text("這個摘要請求無效，請重新輸入 /summary。")
+            return
+        if not await self.db.is_chat_authorized(chat_id):
+            await callback.edit_message_text("這個群組目前無法摘要，請重新輸入 /summary。")
+            return
+        settings = await self.db.get_chat_settings(chat_id)
+        if not await self._user_summary_access_allowed(chat_id, callback.from_user.id):
+            await self._record_user_summary_failure(
+                callback.from_user.id, chat_id, request.prompt, settings.timezone
+            )
+            await callback.edit_message_text("無法確認你仍在這個已授權群組，請重新輸入 /summary。")
+            return
+
+        now = utc_now()
+        try:
+            parsed = await self.query_parser.parse(
+                text=request.prompt, model=settings.model, timezone_text=settings.timezone, now_utc=now
+            )
+            resolved = resolve_query(
+                parsed, timezone_text=settings.timezone, now_utc=now,
+                retention_days=self.settings.message_retention_days,
+            )
+        except SummaryQueryError as exc:
+            await self._record_user_summary_failure(callback.from_user.id, chat_id, request.prompt, settings.timezone)
+            await callback.edit_message_text(str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("User summary query parsing failed: %s", exc)
+            await self._record_user_summary_failure(
+                callback.from_user.id,
+                chat_id,
+                request.prompt,
+                settings.timezone,
+            )
+            await callback.edit_message_text("產生摘要失敗，請稍後再試。")
+            return
+
+        day_key = now.astimezone(parse_timezone(settings.timezone)).date().isoformat()
+        limit = None if callback.from_user.id == self.settings.owner_telegram_user_id else self.settings.daily_user_summary_limit
+        request_id = await self.db.reserve_user_summary(
+            user_id=callback.from_user.id, chat_id=chat_id, prompt=request.prompt, day_key=day_key,
+            created_at_utc=to_iso(now), limit=limit,
+        )
+        if request_id is None:
+            await callback.edit_message_text(
+                f"你在此群組今天的摘要額度（{limit} 次）已用完，將依群組時區 {settings.timezone} 於午夜重置。"
+            )
+            return
+        await callback.edit_message_text("開始整理摘要，請稍候...")
+        from_iso = to_iso(resolved.start_utc) if resolved.start_utc else None
+        to_iso_override = to_iso(resolved.end_utc) if resolved.end_utc else to_iso(now)
+        try:
+            total_count, rows = await self.db.get_messages_for_summary(
+                chat_id=chat_id, from_utc_iso=from_iso, to_utc_iso=to_iso_override,
+                limit=self.settings.max_messages_per_summary,
+            )
+            if not rows:
+                await self.db.set_user_summary_status(request_id, "failed")
+                await callback.edit_message_text("在這個範圍內找不到可摘要的文字訊息。")
+                return
+            title, username = await self._resolve_chat_metadata(chat_id)
+            full_text = await self._render_summary(
+                chat_id=chat_id, chat_title=title, chat_username=username, settings=settings,
+                rows=rows, total_count=total_count, triggered_by="user", topic=resolved.topic,
+            )
+            if not full_text:
+                await self.db.set_user_summary_status(request_id, "failed")
+                return
+            if not await self._user_summary_access_allowed(chat_id, callback.from_user.id):
+                await self.db.set_user_summary_status(request_id, "failed")
+                await callback.edit_message_text(
+                    "無法再次確認你仍在這個已授權群組，因此未傳送摘要。"
+                )
+                return
+            await self.application.bot.send_message(
+                chat_id=callback.from_user.id, text=full_text, parse_mode="HTML",
+                link_preview_options=self._disabled_link_preview(),
+            )
+        except TimedOut:
+            logger.warning("User summary delivery timed out; retaining pending request %s", request_id)
+            await callback.edit_message_text(
+                "摘要傳送結果尚未確認，為避免重複傳送，請稍後再查看額度。"
+            )
+            return
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("User summary failed (request_id=%s): %s", request_id, exc)
+            await self.db.set_user_summary_status(request_id, "failed")
+            await callback.edit_message_text("產生摘要失敗，請稍後再試。")
+            return
+        await self.db.set_user_summary_status(request_id, "succeeded")
+
+    async def _user_summary_access_allowed(self, chat_id: int, user_id: int) -> bool:
+        return bool(
+            await self.db.is_chat_authorized(chat_id)
+            and await self._check_active_membership(chat_id, user_id)
+        )
+
+    async def _record_user_summary_failure(
+        self, user_id: int, chat_id: int, prompt: str, timezone_text: str
+    ) -> None:
+        now = utc_now()
+        day_key = now.astimezone(parse_timezone(timezone_text)).date().isoformat()
+        await self.db.record_failed_user_summary(
+            user_id=user_id, chat_id=chat_id, prompt=prompt, day_key=day_key, created_at_utc=to_iso(now)
+        )
+
+    async def user_summary_history(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_owner(update):
+            return
+        message = update.effective_message
+        chat = update.effective_chat
+        if not message or not chat:
+            return
+        if chat.type != ChatType.PRIVATE:
+            await message.reply_text("請私訊機器人使用 /user_summary_history。")
+            return
+        history = await self.db.get_user_summary_history(
+            excluded_user_id=self.settings.owner_telegram_user_id
+        )
+        if not history:
+            await message.reply_text("目前沒有一般使用者的私訊摘要紀錄。")
+            return
+        chunks: list[str] = []
+        current_chunk = ""
+        for item in history:
+            title, _ = await self._resolve_chat_metadata(item.chat_id)
+            entry = (
+                f"使用者：{item.user_id}\n群組：{title}\n條件：{item.prompt}\n"
+                f"時間（UTC）：{item.created_at_utc}\n狀態：{item.status}"
+            )
+            if current_chunk and len(current_chunk) + len(entry) + 2 > 4000:
+                chunks.append(current_chunk)
+                current_chunk = entry
+            else:
+                current_chunk = f"{current_chunk}\n\n{entry}".strip()
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        for chunk in chunks:
+            await message.reply_text(chunk)
 
     async def preview_summary(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update) or not await self._assert_authorized_group(update):
@@ -174,8 +402,15 @@ class SummaryMixin:
                 await self.db.set_next_run(chat_settings.chat_id, to_iso(next_run))
 
     async def cleanup_tick(self, _: ContextTypes.DEFAULT_TYPE) -> None:
-        cutoff = utc_now() - timedelta(days=self.settings.message_retention_days)
+        now = utc_now()
+        cutoff = now - timedelta(days=self.settings.message_retention_days)
         await self.db.purge_old_messages(to_iso(cutoff))
+        await self.db.purge_old_user_summary_requests(to_iso(cutoff))
+        self.user_summary_requests = {
+            user_id: request
+            for user_id, request in self.user_summary_requests.items()
+            if request.expires_at >= now
+        }
 
     async def generate_and_post_summary(
         self,

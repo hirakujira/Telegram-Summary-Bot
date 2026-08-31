@@ -59,6 +59,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe))
     application.add_handler(CommandHandler("status", bot.status))
     application.add_handler(CommandHandler("summary", bot.manual_summary))
+    application.add_handler(CommandHandler("user_summary_history", bot.user_summary_history))
     application.add_handler(CommandHandler("preview", bot.preview_summary))
     application.add_handler(CommandHandler("set_schedule", bot.set_schedule))
     application.add_handler(CommandHandler("set_timezone", bot.set_timezone))
@@ -66,7 +67,12 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("set_reasoning", bot.set_reasoning))
     application.add_handler(CommandHandler("set_style", bot.set_style))
     application.add_handler(CommandHandler("set_auto", bot.set_auto))
-    application.add_handler(CallbackQueryHandler(bot.handle_subscription_callback))
+    application.add_handler(
+        CallbackQueryHandler(bot.handle_subscription_callback, pattern=r"^(subscribe|unsubscribe):")
+    )
+    application.add_handler(
+        CallbackQueryHandler(bot.handle_user_summary_callback, pattern=r"^user_summary:")
+    )
     application.add_handler(
         MessageHandler(filters.ALL & ~filters.COMMAND, bot.capture_message),
     )

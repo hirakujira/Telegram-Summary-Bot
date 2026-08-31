@@ -19,6 +19,7 @@ ACTIVE_MEMBER_STATUSES = {"member", "administrator", "owner", "creator"}
 class BotBase:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.user_summary_requests: dict[int, object] = {}
         self.db = Database(
             path=settings.sqlite_path,
             default_timezone=settings.default_timezone,

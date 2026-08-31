@@ -80,6 +80,7 @@ docker compose up -d --build
 | `MAX_MESSAGES_PER_SUMMARY` | `10000` | 單次送給模型的最新訊息上限。超過時仍會顯示完整訊息總數 |
 | `MIN_MESSAGES_TO_SUMMARY` | `8` | 自動摘要的最低訊息數 |
 | `MAX_SUMMARY_GAP_HOURS` | `24` | 未達最低訊息數時，最久累積多久仍強制產生一次自動摘要 |
+| `DAILY_USER_SUMMARY_LIMIT` | `0` | 一般使用者私訊摘要每日每群組額度；`0` 停用，正整數啟用 |
 | `MESSAGE_RETENTION_DAYS` | `180` | 原始訊息保存天數，也限制帶時間範圍的手動摘要可查詢範圍 |
 | `OPENAI_MAX_OUTPUT_TOKENS` | `25000` | 每次摘要與條件解析的輸出 token 上限。使用 reasoning 模型時通常需要較高值 |
 
@@ -94,6 +95,7 @@ docker compose up -d --build
 | `/start`、`/help` | 顯示指令說明 |
 | `/summary` | 立即整理上次摘要後的訊息 |
 | `/summary <條件>` | 依自然語言指定時間或主題，例如 `/summary 這兩週以來討論到露營的事情` |
+| `/user_summary_history` | owner 私訊查看最近 20 筆一般使用者摘要請求 |
 | `/preview` | 私訊預覽最近 24 小時的摘要 |
 | `/status` | 顯示目前群組設定與摘要進度 |
 | `/set_schedule <cron>` | 設定群組排程 |
@@ -111,10 +113,13 @@ docker compose up -d --build
 | --- | --- | --- |
 | `/subscribe` | 私訊 Bot | 選擇要訂閱的已授權群組 |
 | `/unsubscribe` | 私訊 Bot | 取消群組摘要訂閱 |
+| `/summary <條件>` | 私訊 Bot | 選擇自己仍在其中的授權群組，產生私訊摘要 |
 
 訂閱清單只會顯示 Bot 能確認使用者仍在其中的群組。因此 Bot 必須是可訂閱群組的管理員，才能可靠呼叫 Telegram 的成員查詢 API。無法確認時，Bot 不會顯示群組、不會建立訂閱。
 
 只有**排程自動摘要**會私訊訂閱者。手動 `/summary`、帶條件的 `/summary <條件>` 與 `/preview` 不會通知訂閱者。Bot 會重用已產生的 HTML 摘要，不會增加 OpenAI API 呼叫；寄送前也會再次確認訂閱者仍是群組成員，離群者會自動取消訂閱。
+
+設定 `DAILY_USER_SUMMARY_LIMIT` 為正整數後，一般使用者可私訊 `/summary <條件>`，再以按鈕選擇群組。結果只會私訊請求者，不會發佈到群組或改變群組摘要進度。額度以每位使用者、每個群組分開計算，並依該群組時區每日午夜重置；預設 `0` 代表停用此功能。owner 使用私訊摘要不限額。owner 可私訊 `/user_summary_history` 查看最近 20 筆一般使用者的 prompt、目標群組、時間與結果狀態。
 
 ## 排程與時區
 

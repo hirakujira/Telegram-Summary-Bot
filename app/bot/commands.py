@@ -25,6 +25,7 @@ class CommandMixin:
                 "請私訊機器人使用：\n"
                 "/subscribe - 訂閱你所在群組的排程摘要\n"
                 "/unsubscribe - 取消摘要訂閱"
+                "\n/summary <條件> - 對你所在的授權群組請求摘要"
             )
             return
 
@@ -41,10 +42,12 @@ class CommandMixin:
             "/set_reasoning <default|none|minimal|low|medium|high|xhigh|max> - 設定 reasoning\n"
             "/set_style <normal|funny|roast> - 設定摘要風格\n"
             "/set_auto <on|off> - 開關自動摘要\n"
+            "/user_summary_history - 查看一般用戶私訊摘要紀錄\n"
             "\n"
             "一般用戶（請私訊機器人）：\n"
             "/subscribe - 訂閱你所在群組的排程摘要\n"
             "/unsubscribe - 取消摘要訂閱\n"
+            "/summary <條件> - 對你所在的授權群組請求摘要\n"
             "\n"
             "提醒：請在 BotFather 關閉 privacy mode，才能接收群組完整訊息。\n"
             "提醒：/preview 結果只會私訊擁有者，擁有者需先私訊 bot 一次。"
