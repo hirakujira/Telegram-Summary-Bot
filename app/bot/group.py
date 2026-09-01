@@ -5,6 +5,10 @@ from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 
 from app.bot.base import ACTIVE_MEMBER_STATUSES, logger
+from app.bot.command_menu import (
+    delete_group_owner_command_menu,
+    sync_group_owner_command_menu,
+)
 from app.time_utils import to_iso
 
 
@@ -62,6 +66,11 @@ class GroupMixin:
             added_by = membership.from_user
             if added_by and added_by.id == self.settings.owner_telegram_user_id:
                 await self.db.authorize_chat(chat.id)
+                await sync_group_owner_command_menu(
+                    self.application.bot,
+                    chat.id,
+                    self.settings.owner_telegram_user_id,
+                )
                 logger.info("Authorized group %s because owner added the bot", chat.id)
                 return
 
@@ -73,6 +82,11 @@ class GroupMixin:
 
         if was_active and not is_active:
             await self.db.revoke_chat_authorization(chat.id)
+            await delete_group_owner_command_menu(
+                self.application.bot,
+                chat.id,
+                self.settings.owner_telegram_user_id,
+            )
             logger.info("Revoked authorization for group %s after bot removal", chat.id)
 
     async def handle_owner_chat_member(
@@ -100,6 +114,11 @@ class GroupMixin:
             return
 
         await self.db.revoke_chat_authorization(chat.id)
+        await delete_group_owner_command_menu(
+            self.application.bot,
+            chat.id,
+            self.settings.owner_telegram_user_id,
+        )
         await self._notify_and_leave_unauthorized_group(
             chat,
             "owner 已離開群組",

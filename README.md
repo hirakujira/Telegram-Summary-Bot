@@ -57,11 +57,12 @@ docker compose up -d --build
 
 1. 在 BotFather 建立 Bot，取得 `TELEGRAM_BOT_TOKEN`。
 2. 在 BotFather 對 Bot 執行 `/setprivacy`，選擇 `Disable`。否則 Bot 通常只能收到指令，無法取得完整群組訊息。
-3. 使用 `OWNER_TELEGRAM_USER_ID` 對應的帳號將 Bot 加入群組。
-4. 將 Bot 設為群組管理員。Telegram 只有在 Bot 是管理員時，才會傳送 owner 與其他成員的狀態變更。
-5. 若 owner 沒有親自加入 Bot，Bot 會私訊通知 owner 後離開群組，不會保存群組訊息。
-6. owner 離開群組時，Bot 會撤銷授權後自行離開；owner 重新加入群組後，需重新加入 Bot。
-7. owner 和要訂閱的使用者都需要先私訊 Bot 一次，Telegram 才允許 Bot 主動傳送私訊。
+3. 指令選單會由 Bot 自動同步，不需要在 BotFather 逐一設定。
+4. 使用 `OWNER_TELEGRAM_USER_ID` 對應的帳號將 Bot 加入群組。
+5. 將 Bot 設為群組管理員。Telegram 只有在 Bot 是管理員時，才會傳送 owner 與其他成員的狀態變更。
+6. 若 owner 沒有親自加入 Bot，Bot 會私訊通知 owner 後離開群組，不會保存群組訊息。
+7. owner 離開群組時，Bot 會撤銷授權後自行離開；owner 重新加入群組後，需重新加入 Bot。
+8. owner 和要訂閱的使用者都需要先私訊 Bot 一次，Telegram 才允許 Bot 主動傳送私訊。
 
 ## 設定
 
@@ -98,12 +99,13 @@ docker compose up -d --build
 | `/user_summary_history` | owner 私訊查看最近 20 筆一般使用者摘要請求 |
 | `/preview` | 私訊預覽最近 24 小時的摘要 |
 | `/status` | 顯示目前群組設定與摘要進度 |
-| `/set_schedule <cron>` | 設定群組排程 |
-| `/set_timezone <tz>` | 設定時區，例如 `UTC+8`、`Asia/Taipei` |
-| `/set_model <model>` | 設定摘要模型 |
-| `/set_reasoning <level>` | 設定 reasoning 程度 |
-| `/set_style <normal\|funny\|roast>` | 設定摘要風格 |
-| `/set_auto <on\|off>` | 開啟或關閉自動摘要 |
+| `/set_schedule <cron>` | 設定群組排程；不帶值時依提示輸入 |
+| `/set_timezone <tz>` | 設定時區，例如 `UTC+8`、`Asia/Taipei`；不帶值時依提示輸入 |
+| `/set_model <model>` | 設定摘要模型；不帶值時依提示輸入 |
+| `/set_reasoning <level>` | 設定 reasoning 程度；不帶值時依提示輸入 |
+| `/set_style <normal\|funny\|roast>` | 設定摘要風格；不帶值時依提示輸入 |
+| `/set_auto <on\|off>` | 開啟或關閉自動摘要；不帶值時依提示輸入 |
+| `/cancel` | 取消進行中的設定問答 |
 
 `/summary` 與 `/preview` 都必須在已授權群組中執行。手動摘要只要有文字訊息就會執行，不受 `MIN_MESSAGES_TO_SUMMARY` 限制。
 

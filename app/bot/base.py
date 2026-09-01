@@ -6,6 +6,10 @@ from telegram import LinkPreviewOptions, Update
 from telegram.constants import ChatType
 from telegram.ext import Application, ContextTypes
 
+from app.bot.command_menu import (
+    sync_group_owner_command_menu,
+    sync_private_command_menus,
+)
 from app.config import Settings
 from app.db import Database
 from app.llm import OpenAIQueryParser, OpenAISummarizer
@@ -38,6 +42,16 @@ class BotBase:
 
     async def post_init(self, application: Application) -> None:
         await self.db.connect()
+        await sync_private_command_menus(
+            application.bot,
+            self.settings.owner_telegram_user_id,
+        )
+        for chat_id in await self.db.get_authorized_chat_ids():
+            await sync_group_owner_command_menu(
+                application.bot,
+                chat_id,
+                self.settings.owner_telegram_user_id,
+            )
         application.job_queue.run_repeating(self.scheduler_tick, interval=30, first=10)
         application.job_queue.run_repeating(
             self.cleanup_tick,
