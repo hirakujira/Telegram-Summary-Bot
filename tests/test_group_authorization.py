@@ -20,12 +20,36 @@ class FakeTelegramBot:
     def __init__(self) -> None:
         self.sent: list[SimpleNamespace] = []
         self.left_chats: list[int] = []
+        self.command_menus: list[tuple[int, int, list[str]]] = []
 
     async def send_message(self, *, chat_id, text, parse_mode=None) -> None:
         self.sent.append(SimpleNamespace(chat_id=chat_id, text=text, parse_mode=parse_mode))
 
     async def leave_chat(self, chat_id) -> None:
         self.left_chats.append(chat_id)
+
+    async def set_my_commands(self, commands, *, scope) -> bool:
+        self.command_menus.append(
+            (scope.chat_id, scope.user_id, [command.command for command in commands])
+        )
+        return True
+
+
+def build_command_update(*, user_id: int, chat_type: ChatType) -> tuple[SimpleNamespace, SimpleNamespace]:
+    message = SimpleNamespace(replies=[])
+
+    async def reply_text(text: str) -> None:
+        message.replies.append(text)
+
+    message.reply_text = reply_text
+    return (
+        SimpleNamespace(
+            effective_user=SimpleNamespace(id=user_id),
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=GROUP_ID, type=chat_type),
+        ),
+        message,
+    )
 
 
 def build_membership_update(*, actor_id: int, old_status: str, new_status: str):
@@ -158,6 +182,43 @@ class GroupAuthorizationTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(await self.bot.db.is_chat_authorized(GROUP_ID))
         self.assertEqual(self.telegram_bot.left_chats, [])
+
+    async def test_owner_can_authorize_existing_group(self) -> None:
+        update, message = build_command_update(
+            user_id=OWNER_ID,
+            chat_type=ChatType.SUPERGROUP,
+        )
+
+        await self.bot.authorize_group(update, None)
+
+        self.assertTrue(await self.bot.db.is_chat_authorized(GROUP_ID))
+        self.assertEqual(message.replies, ["已授權此群組，並同步擁有者指令選單。"])
+        self.assertEqual(self.telegram_bot.command_menus[0][0:2], (GROUP_ID, OWNER_ID))
+        self.assertIn("authorize_group", self.telegram_bot.command_menus[0][2])
+
+    async def test_non_owner_cannot_authorize_group(self) -> None:
+        update, message = build_command_update(
+            user_id=OWNER_ID + 1,
+            chat_type=ChatType.SUPERGROUP,
+        )
+
+        await self.bot.authorize_group(update, None)
+
+        self.assertFalse(await self.bot.db.is_chat_authorized(GROUP_ID))
+        self.assertEqual(message.replies, ["你沒有權限執行這個指令。"])
+        self.assertEqual(self.telegram_bot.command_menus, [])
+
+    async def test_authorize_group_rejects_private_chat(self) -> None:
+        update, message = build_command_update(
+            user_id=OWNER_ID,
+            chat_type=ChatType.PRIVATE,
+        )
+
+        await self.bot.authorize_group(update, None)
+
+        self.assertFalse(await self.bot.db.is_chat_authorized(GROUP_ID))
+        self.assertEqual(message.replies, ["此指令必須在群組中執行才能授權。"])
+        self.assertEqual(self.telegram_bot.command_menus, [])
 
     async def test_unauthorized_group_activity_leaves_without_storing_message(self) -> None:
         message = SimpleNamespace(

@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes, ConversationHandler
 
+from app.bot.command_menu import sync_group_owner_command_menu
 from app.reasoning import normalize_reasoning_effort
 from app.response_style import normalize_response_style
 from app.time_utils import parse_timezone, utc_now
@@ -46,6 +47,7 @@ class CommandMixin:
             "/set_auto <on|off> - 開關自動摘要（未帶值可依提示輸入）\n"
             "/cancel - 取消進行中的設定\n"
             "/user_summary_history - 查看一般用戶私訊摘要紀錄\n"
+            "/authorize_group - 授權舊版既有群組（請在群組內執行）\n"
             "\n"
             "一般用戶（請私訊機器人）：\n"
             "/subscribe - 訂閱你所在群組的排程摘要\n"
@@ -55,6 +57,25 @@ class CommandMixin:
             "提醒：請在 BotFather 關閉 privacy mode，才能接收群組完整訊息。\n"
             "提醒：/preview 結果只會私訊擁有者，擁有者需先私訊 bot 一次。"
         )
+
+    async def authorize_group(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        if not await self._assert_owner(update):
+            return
+        message = update.effective_message
+        chat = update.effective_chat
+        if not message or not chat:
+            return
+        if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+            await message.reply_text("此指令必須在群組中執行才能授權。")
+            return
+
+        await self.db.authorize_chat(chat.id)
+        await sync_group_owner_command_menu(
+            self.application.bot,
+            chat.id,
+            self.settings.owner_telegram_user_id,
+        )
+        await message.reply_text("已授權此群組，並同步擁有者指令選單。")
 
     async def status(self, update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         if not await self._assert_owner(update) or not await self._assert_authorized_group(update):

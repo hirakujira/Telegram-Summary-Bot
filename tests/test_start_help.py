@@ -53,7 +53,7 @@ class StartHelpTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/set_schedule <cron>", message.replies[0])
         self.assertIn("/subscribe", message.replies[0])
         self.assertNotIn("(僅擁有者)", message.replies[0])
-        self.assertNotIn("/authorize_group", message.replies[0])
+        self.assertIn("/authorize_group - 授權舊版既有群組", message.replies[0])
 
     async def test_non_owner_sees_private_summary_and_subscription_commands(self) -> None:
         update, message = build_update(user_id=OWNER_ID + 1)

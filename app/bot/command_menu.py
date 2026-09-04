@@ -31,6 +31,7 @@ OWNER_PRIVATE_COMMANDS = (
 GROUP_OWNER_COMMANDS = (
     BotCommand("start", "開始使用"),
     BotCommand("help", "顯示使用說明"),
+    BotCommand("authorize_group", "授權舊版既有群組"),
     BotCommand("summary", "立即產生摘要"),
     BotCommand("preview", "私訊預覽摘要"),
     BotCommand("status", "查看群組設定"),

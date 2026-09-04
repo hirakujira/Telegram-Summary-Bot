@@ -94,6 +94,7 @@ docker compose up -d --build
 | 指令 | 說明 |
 | --- | --- |
 | `/start`、`/help` | 顯示指令說明 |
+| `/authorize_group` | 授權舊版已存在的群組；請由 owner 在該群組內執行 |
 | `/summary` | 立即整理上次摘要後的訊息 |
 | `/summary <條件>` | 依自然語言指定時間或主題，例如 `/summary 這兩週以來討論到露營的事情` |
 | `/user_summary_history` | owner 私訊查看最近 20 筆一般使用者摘要請求 |
@@ -164,7 +165,7 @@ docker compose up -d --build
 
 舊版資料庫會在啟動時自動 migration。舊的 `messages.user_name` 會移至 `users` table，所有訊息會被保留；舊訊息沒有回覆關係，之後新收集的訊息才會開始保存。
 
-群組只能由 owner 將 Bot 加入時自動授權。owner 或 Bot 離開群組時，Bot 會撤銷授權；請由 owner 重新加入 Bot。
+owner 將 Bot 加入的新群組會自動授權。舊版已存在的群組可由 owner 在群組內執行 `/authorize_group` 授權。owner 或 Bot 離開群組時，Bot 會撤銷授權；請由 owner 重新加入 Bot 或重新執行 `/authorize_group`。
 
 ## 常見問題
 

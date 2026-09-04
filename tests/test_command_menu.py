@@ -112,6 +112,12 @@ class CommandMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner_scope.chat_id, OWNER_ID)
         self.assertEqual(owner_commands, [command.command for command in OWNER_PRIVATE_COMMANDS])
         self.assertNotIn("set_schedule", owner_commands)
+        self.assertNotIn("authorize_group", owner_commands)
+
+    def test_group_owner_menu_includes_authorize_group(self) -> None:
+        commands = [command.command for command in GROUP_OWNER_COMMANDS]
+
+        self.assertIn("authorize_group", commands)
 
     async def test_post_init_syncs_existing_authorized_group_menu(self) -> None:
         await self.bot.db.authorize_chat(GROUP_ID)

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from telegram.constants import ChatType
-from telegram.ext import ConversationHandler, MessageHandler, filters
+from telegram.ext import CommandHandler, ConversationHandler, MessageHandler, filters
 
 from app.config import Settings
 from app.main import SummaryBot, build_application
@@ -206,3 +206,13 @@ class ManagementCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conversation.per_chat, True)
         self.assertEqual(conversation.per_user, True)
         self.assertTrue(conversation.allow_reentry)
+
+    def test_authorize_group_command_is_registered(self) -> None:
+        application = build_application(self.bot.settings)
+
+        self.assertTrue(
+            any(
+                isinstance(handler, CommandHandler) and "authorize_group" in handler.commands
+                for handler in application.handlers[0]
+            )
+        )

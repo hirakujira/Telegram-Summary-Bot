@@ -58,6 +58,7 @@ def build_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("help", bot.start))
     application.add_handler(CommandHandler("subscribe", bot.subscribe))
     application.add_handler(CommandHandler("unsubscribe", bot.unsubscribe))
+    application.add_handler(CommandHandler("authorize_group", bot.authorize_group))
     application.add_handler(CommandHandler("status", bot.status))
     application.add_handler(CommandHandler("summary", bot.manual_summary))
     application.add_handler(CommandHandler("user_summary_history", bot.user_summary_history))
