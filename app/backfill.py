@@ -30,6 +30,12 @@ class MessageClient(Protocol):
     ) -> AsyncIterator[object]: ...
 
 
+class DialogClient(Protocol):
+    async def get_entity(self, chat: str) -> object: ...
+
+    def iter_dialogs(self) -> AsyncIterator[object]: ...
+
+
 class MessageStore(Protocol):
     async def save_text_message(
         self,
@@ -74,6 +80,25 @@ def get_group_chat_id(entity: object) -> int:
     if isinstance(entity, Channel) and entity.megagroup:
         return -100_000_000_0000 - entity.id
     raise BackfillError("--chat must resolve to a Telegram group or supergroup")
+
+
+async def resolve_chat(client: DialogClient, chat: str) -> object:
+    try:
+        expected_chat_id = int(chat)
+    except ValueError:
+        return await client.get_entity(chat)
+
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+        try:
+            if get_group_chat_id(entity) == expected_chat_id:
+                return entity
+        except BackfillError:
+            continue
+    raise BackfillError(
+        f"Cannot find group {chat} in this user session. "
+        "Confirm the account is still a member of the group."
+    )
 
 
 def display_name(sender: object) -> str:
@@ -223,7 +248,7 @@ async def run(args: argparse.Namespace) -> BackfillResult:
             flood_sleep_threshold=300,
         ) as client:
             await client.start()
-            entity = await client.get_entity(args.chat)
+            entity = await resolve_chat(client, args.chat)
             chat_id = get_group_chat_id(entity)
             if not await database.is_chat_authorized(chat_id):
                 raise BackfillError("the resolved group is not authorized in this database")

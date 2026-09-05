@@ -182,7 +182,7 @@ python -m app.backfill \
   --session ~/.local/share/telegram-summary-backfill
 ```
 
-也可用 `--api-id` 與 `--api-hash` 明確傳入。首次執行會在終端要求登入；`--session` 必須是持久的本機檔案路徑，請勿提交或分享其產生的 session 檔。工具只讀取指定 UTC 半開區間（`from <= date < to`）的文字與 caption，既有 `(chat_id, message_id)` 不會被覆寫，且不會啟動 Bot API。每讀取 100 則訊息會輸出一次進度，百分比依指定的時間區間計算。
+也可用 `--api-id` 與 `--api-hash` 明確傳入。首次執行會在終端要求登入；`--session` 必須是持久的本機檔案路徑，請勿提交或分享其產生的 session 檔。`--chat` 可填公開群組 username，或 `/status` 顯示的 `-100...` chat ID，私密群組 ID 會從該帳號的 dialogs 自動查找。工具只讀取指定 UTC 半開區間（`from <= date < to`）的文字與 caption，既有 `(chat_id, message_id)` 不會被覆寫，且不會啟動 Bot API。每讀取 100 則訊息會輸出一次進度，百分比依指定的時間區間計算。
 
 此操作會將群組成員名稱、文字與回覆關係寫入本機 SQLite 資料庫，適用同一份資料保存政策。僅應在你有權存取與處理其資料的群組執行，並妥善保護 API hash 與 session 檔。
 

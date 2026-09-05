@@ -8,12 +8,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.backfill import (
+    BackfillError,
     BackfillResult,
     PROGRESS_INTERVAL,
     backfill_messages,
     display_name,
     parse_utc_datetime,
     reply_target,
+    resolve_chat,
     run,
 )
 
@@ -87,6 +89,22 @@ class FakeTelegramClient:
     async def get_entity(self, chat):
         self.chat = chat
         return object()
+
+    async def iter_dialogs(self):
+        return
+        yield
+
+
+class FakeDialogClient:
+    def __init__(self, entities):
+        self.entities = entities
+
+    async def get_entity(self, chat):
+        raise AssertionError("numeric chat IDs must resolve through dialogs")
+
+    async def iter_dialogs(self):
+        for entity in self.entities:
+            yield SimpleNamespace(entity=entity)
 
 
 def message(message_id, date, text, sender=None, reply_to=None):
@@ -239,6 +257,19 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
             reply_to_peer_id=SimpleNamespace(channel_id=999),
         )
         self.assertIsNone(reply_target(SimpleNamespace(reply_to=reply), CHAT_ID))
+
+    async def test_resolves_numeric_group_id_from_dialogs(self):
+        other_entity = object()
+        target_entity = object()
+        client = FakeDialogClient([other_entity, target_entity])
+
+        with patch(
+            "app.backfill.get_group_chat_id",
+            side_effect=[BackfillError("not a group"), CHAT_ID],
+        ):
+            entity = await resolve_chat(client, str(CHAT_ID))
+
+        self.assertIs(entity, target_entity)
 
     async def test_run_starts_the_client_for_interactive_session_login(self):
         database = FakeRunDatabase()
