@@ -204,6 +204,7 @@ async def run(args: argparse.Namespace) -> BackfillResult:
             args.api_hash,
             flood_sleep_threshold=300,
         ) as client:
+            await client.start()
             entity = await client.get_entity(args.chat)
             chat_id = get_group_chat_id(entity)
             if not await database.is_chat_authorized(chat_id):

@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
-from app.backfill import backfill_messages, display_name, parse_utc_datetime, reply_target
+from app.backfill import (
+    BackfillResult,
+    backfill_messages,
+    display_name,
+    parse_utc_datetime,
+    reply_target,
+    run,
+)
 
 
 UTC = timezone.utc
@@ -38,6 +48,43 @@ class FakeDatabase:
 
     async def commit(self):
         self.commits += 1
+
+
+class FakeRunDatabase:
+    async def connect(self):
+        self.connected = True
+
+    async def close(self):
+        self.closed = True
+
+    async def is_chat_authorized(self, chat_id):
+        self.authorized_chat_id = chat_id
+        return True
+
+
+class FakeTelegramClient:
+    instance = None
+
+    def __init__(self, session, api_id, api_hash, *, flood_sleep_threshold):
+        self.session = session
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.flood_sleep_threshold = flood_sleep_threshold
+        self.started = False
+        FakeTelegramClient.instance = self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def start(self):
+        self.started = True
+
+    async def get_entity(self, chat):
+        self.chat = chat
+        return object()
 
 
 def message(message_id, date, text, sender=None, reply_to=None):
@@ -156,6 +203,37 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
             reply_to_peer_id=SimpleNamespace(channel_id=999),
         )
         self.assertIsNone(reply_target(SimpleNamespace(reply_to=reply), CHAT_ID))
+
+    async def test_run_starts_the_client_for_interactive_session_login(self):
+        database = FakeRunDatabase()
+        args = SimpleNamespace(
+            from_utc=datetime(2024, 1, 1, tzinfo=UTC),
+            to_utc=datetime(2024, 1, 2, tzinfo=UTC),
+            api_id="12345",
+            api_hash="api-hash",
+            chat="@group",
+        )
+        with TemporaryDirectory() as temp_dir:
+            args.session = str(Path(temp_dir) / "account")
+            args.database = str(Path(temp_dir) / "bot.db")
+            with (
+                patch("app.backfill.Database", return_value=database),
+                patch("telethon.TelegramClient", FakeTelegramClient),
+                patch("app.backfill.get_group_chat_id", return_value=CHAT_ID),
+                patch(
+                    "app.backfill.backfill_messages",
+                    new=AsyncMock(return_value=BackfillResult(saved=3)),
+                ),
+            ):
+                result = await run(args)
+
+        self.assertEqual(result.saved, 3)
+        self.assertTrue(FakeTelegramClient.instance.started)
+        self.assertEqual(FakeTelegramClient.instance.session, args.session)
+        self.assertEqual(FakeTelegramClient.instance.flood_sleep_threshold, 300)
+        self.assertEqual(database.authorized_chat_id, CHAT_ID)
+        self.assertTrue(database.connected)
+        self.assertTrue(database.closed)
 
 
 if __name__ == "__main__":
