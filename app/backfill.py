@@ -4,15 +4,16 @@ import argparse
 import asyncio
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import AsyncIterator, Protocol
+from typing import AsyncIterator, Callable, Protocol
 
 from app.db import Database
 from app.time_utils import to_iso
 
 
 COMMIT_BATCH_SIZE = 500
+PROGRESS_INTERVAL = 100
 
 
 class BackfillError(ValueError):
@@ -20,7 +21,13 @@ class BackfillError(ValueError):
 
 
 class MessageClient(Protocol):
-    def iter_messages(self, entity: object, *, reverse: bool) -> AsyncIterator[object]: ...
+    def iter_messages(
+        self,
+        entity: object,
+        *,
+        reverse: bool,
+        offset_date: datetime,
+    ) -> AsyncIterator[object]: ...
 
 
 class MessageStore(Protocol):
@@ -120,12 +127,23 @@ async def backfill_messages(
     chat_id: int,
     from_utc: datetime,
     to_utc: datetime,
+    report_progress: Callable[[BackfillResult, datetime | None], None] | None = None,
 ) -> BackfillResult:
     result = BackfillResult()
     uncommitted_writes = 0
-    async for message in client.iter_messages(entity, reverse=True):
+    # Telethon reverses offset semantics with `reverse=True`. The API's date
+    # offset is exclusive, so step back one second to include messages exactly
+    # at the requested UTC-second boundary.
+    offset_date = from_utc - timedelta(seconds=1)
+    async for message in client.iter_messages(
+        entity,
+        reverse=True,
+        offset_date=offset_date,
+    ):
         result = BackfillResult(result.scanned + 1, result.saved, result.skipped)
         date = getattr(message, "date", None)
+        if report_progress and result.scanned % PROGRESS_INTERVAL == 0:
+            report_progress(result, date.astimezone(timezone.utc) if date else None)
         if date is None:
             result = BackfillResult(result.scanned, result.saved, result.skipped + 1)
             continue
@@ -209,8 +227,35 @@ async def run(args: argparse.Namespace) -> BackfillResult:
             chat_id = get_group_chat_id(entity)
             if not await database.is_chat_authorized(chat_id):
                 raise BackfillError("the resolved group is not authorized in this database")
+
+            total_seconds = (args.to_utc - args.from_utc).total_seconds()
+
+            def report_progress(result: BackfillResult, message_date: datetime | None) -> None:
+                if message_date is None:
+                    progress = 0
+                    timestamp = "unknown"
+                else:
+                    progress = min(
+                        100,
+                        max(0, (message_date - args.from_utc).total_seconds() / total_seconds * 100),
+                    )
+                    timestamp = to_iso(message_date)
+                print(
+                    f"Backfill progress: {progress:.1f}% "
+                    f"scanned={result.scanned} saved={result.saved} "
+                    f"skipped={result.skipped} at={timestamp}",
+                    flush=True,
+                )
+
+            print("Backfill started. Progress updates every 100 messages.", flush=True)
             return await backfill_messages(
-                client, database, entity, chat_id, args.from_utc, args.to_utc
+                client,
+                database,
+                entity,
+                chat_id,
+                args.from_utc,
+                args.to_utc,
+                report_progress,
             )
     finally:
         await database.close()

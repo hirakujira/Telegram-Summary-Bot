@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from app.backfill import (
     BackfillResult,
+    PROGRESS_INTERVAL,
     backfill_messages,
     display_name,
     parse_utc_datetime,
@@ -26,8 +27,9 @@ class FakeClient:
         self.messages = messages
         self.reverse = None
 
-    async def iter_messages(self, entity, *, reverse):
+    async def iter_messages(self, entity, *, reverse, offset_date):
         self.reverse = reverse
+        self.offset_date = offset_date
         for message in self.messages:
             yield message
 
@@ -126,11 +128,45 @@ class BackfillTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(client.reverse)
+        self.assertEqual(
+            client.offset_date,
+            datetime(2024, 1, 1, 23, 59, 59, tzinfo=UTC),
+        )
         self.assertEqual([row["message_id"] for row in database.saved], [2, 3])
         self.assertEqual(database.saved[0]["user_name"], "Ada Lovelace (@ada)")
         self.assertEqual(database.saved[1]["reply_to_message_id"], 2)
         self.assertEqual(result.saved, 2)
         self.assertEqual(database.commits, 1)
+
+    async def test_reports_progress_every_hundred_messages(self):
+        sender = SimpleNamespace(id=7, first_name="Ada", last_name=None, username=None)
+        client = FakeClient(
+            [
+                message(
+                    index,
+                    datetime(2024, 1, 2, tzinfo=UTC),
+                    f"message {index}",
+                    sender,
+                )
+                for index in range(1, PROGRESS_INTERVAL + 1)
+            ]
+        )
+        database = FakeDatabase()
+        updates = []
+
+        await backfill_messages(
+            client,
+            database,
+            object(),
+            CHAT_ID,
+            datetime(2024, 1, 2, tzinfo=UTC),
+            datetime(2024, 1, 3, tzinfo=UTC),
+            lambda result, message_date: updates.append((result, message_date)),
+        )
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0][0].scanned, PROGRESS_INTERVAL)
+        self.assertEqual(updates[0][1], datetime(2024, 1, 2, tzinfo=UTC))
 
     async def test_skips_empty_or_senderless_messages_and_cross_chat_replies(self):
         sender = SimpleNamespace(id=7, first_name="Ada", last_name=None, username=None)
