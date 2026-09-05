@@ -167,6 +167,25 @@ docker compose up -d --build
 
 owner 將 Bot 加入的新群組會自動授權。舊版已存在的群組可由 owner 在群組內執行 `/authorize_group` 授權。owner 或 Bot 離開群組時，Bot 會撤銷授權；請由 owner 重新加入 Bot 或重新執行 `/authorize_group`。
 
+## 補回舊訊息
+
+Bot API 無法讀取加入前的群組歷史；可使用自己的 Telegram 帳號，以一次性的 MTProto session 補回資料。先在 [my.telegram.org](https://my.telegram.org) 建立 API ID/hash，並確認該帳號已在目標群組中。目標群組必須已由 Bot 授權，否則工具會拒絕寫入。
+
+```bash
+pip install -r requirements.txt
+export TELEGRAM_API_ID=123456
+export TELEGRAM_API_HASH=your_api_hash
+python -m app.backfill \
+  --chat @group_username \
+  --from 2025-01-01T00:00:00Z \
+  --to 2025-02-01T00:00:00Z \
+  --session ~/.local/share/telegram-summary-backfill
+```
+
+也可用 `--api-id` 與 `--api-hash` 明確傳入。首次執行會在終端要求登入；`--session` 必須是持久的本機檔案路徑，請勿提交或分享其產生的 session 檔。工具只讀取指定 UTC 半開區間（`from <= date < to`）的文字與 caption，既有 `(chat_id, message_id)` 不會被覆寫，且不會啟動 Bot API。
+
+此操作會將群組成員名稱、文字與回覆關係寫入本機 SQLite 資料庫，適用同一份資料保存政策。僅應在你有權存取與處理其資料的群組執行，並妥善保護 API hash 與 session 檔。
+
 ## 常見問題
 
 ### Bot 看不到群組訊息

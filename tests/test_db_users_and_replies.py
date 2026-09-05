@@ -174,14 +174,14 @@ class MessageStoreTests(unittest.IsolatedAsyncioTestCase):
         await self._save(
             message_id=1,
             user_id=11,
-            user_name="阿明",
+            user_name="阿明目前名稱",
             text="原始內容",
             created_at_utc="2026-07-01T00:00:00+00:00",
         )
         await self._save(
             message_id=1,
             user_id=11,
-            user_name="阿明",
+            user_name="阿明舊名稱",
             text="重複送達的內容",
             created_at_utc="2026-07-01T00:00:00+00:00",
         )
@@ -189,6 +189,7 @@ class MessageStoreTests(unittest.IsolatedAsyncioTestCase):
         rows = await self._all_rows()
 
         self.assertEqual([row["text"] for row in rows], ["原始內容"])
+        self.assertEqual([row["user_name"] for row in rows], ["阿明目前名稱"])
 
     async def test_message_without_stored_user_falls_back_to_placeholder(self) -> None:
         await self.db.connect()

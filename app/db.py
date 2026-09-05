@@ -464,8 +464,21 @@ class Database:
         text: str,
         created_at_utc: str,
         reply_to_message_id: int | None = None,
-    ) -> None:
+        commit: bool = True,
+    ) -> bool:
         assert self.conn is not None
+        cursor = await self.conn.execute(
+            """
+            INSERT OR IGNORE INTO messages(
+              chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc
+            )
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc),
+        )
+        if cursor.rowcount != 1:
+            return False
+
         # The name is stored once per user, so a rename retroactively applies to
         # every message that user ever sent.
         await self.conn.execute(
@@ -479,16 +492,9 @@ class Database:
             """,
             (user_id, user_name, to_iso(utc_now())),
         )
-        await self.conn.execute(
-            """
-            INSERT OR IGNORE INTO messages(
-              chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc
-            )
-            VALUES(?, ?, ?, ?, ?, ?)
-            """,
-            (chat_id, message_id, user_id, text, reply_to_message_id, created_at_utc),
-        )
-        await self.conn.commit()
+        if commit:
+            await self.conn.commit()
+        return True
 
     async def get_messages_for_summary(
         self,
