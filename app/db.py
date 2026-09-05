@@ -245,6 +245,10 @@ class Database:
         if self.conn:
             await self.conn.close()
 
+    async def commit(self) -> None:
+        assert self.conn is not None
+        await self.conn.commit()
+
     async def ensure_chat(self, chat_id: int) -> ChatSettings:
         assert self.conn is not None
         cursor = await self.conn.execute(

@@ -191,6 +191,24 @@ class MessageStoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["text"] for row in rows], ["原始內容"])
         self.assertEqual([row["user_name"] for row in rows], ["阿明目前名稱"])
 
+    async def test_commit_flushes_deferred_message_write(self) -> None:
+        await self.db.connect()
+        inserted = await self.db.save_text_message(
+            chat_id=CHAT_ID,
+            message_id=1,
+            user_id=11,
+            user_name="阿明",
+            text="延後提交",
+            created_at_utc="2026-07-01T00:00:00+00:00",
+            commit=False,
+        )
+
+        await self.db.commit()
+        rows = await self._all_rows()
+
+        self.assertTrue(inserted)
+        self.assertEqual([row["text"] for row in rows], ["延後提交"])
+
     async def test_message_without_stored_user_falls_back_to_placeholder(self) -> None:
         await self.db.connect()
         await self._save(
