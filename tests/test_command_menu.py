@@ -133,6 +133,7 @@ class CommandMenuTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(group_scope.user_id, OWNER_ID)
         self.assertEqual(group_commands, [command.command for command in GROUP_OWNER_COMMANDS])
         self.assertEqual(len(job_queue.calls), 2)
+        self.assertEqual(job_queue.calls[0][1:], (120, 10))
 
     async def test_menu_api_failure_does_not_block_initialization(self) -> None:
         await self.bot.db.close()

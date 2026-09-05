@@ -52,7 +52,7 @@ class BotBase:
                 chat_id,
                 self.settings.owner_telegram_user_id,
             )
-        application.job_queue.run_repeating(self.scheduler_tick, interval=30, first=10)
+        application.job_queue.run_repeating(self.scheduler_tick, interval=120, first=10)
         application.job_queue.run_repeating(
             self.cleanup_tick,
             interval=24 * 3600,
